@@ -55,13 +55,30 @@ pub struct ClassNode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassKind {
     Dot,
-    PerlDigit, PerlSpace, PerlWord,
-    AsciiAlnum, AsciiAlpha, AsciiAscii, AsciiBlank, AsciiCntrl,
-    AsciiDigit, AsciiGraph, AsciiLower, AsciiPrint, AsciiPunct,
-    AsciiSpace, AsciiUpper, AsciiWord, AsciiXdigit,
+    PerlDigit,
+    PerlSpace,
+    PerlWord,
+    AsciiAlnum,
+    AsciiAlpha,
+    AsciiAscii,
+    AsciiBlank,
+    AsciiCntrl,
+    AsciiDigit,
+    AsciiGraph,
+    AsciiLower,
+    AsciiPrint,
+    AsciiPunct,
+    AsciiSpace,
+    AsciiUpper,
+    AsciiWord,
+    AsciiXdigit,
     Unicode(UnicodeClassKind),
     Bracketed(Vec<ClassItem>),
-    BracketedOp { op: ClassBinaryOp, lhs: Box<ClassKind>, rhs: Box<ClassKind> },
+    BracketedOp {
+        op: ClassBinaryOp,
+        lhs: Box<ClassKind>,
+        rhs: Box<ClassKind>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,7 +98,11 @@ pub enum ClassBinaryOp {
 #[derive(Debug, Clone, PartialEq)]
 pub enum UnicodeClassKind {
     Named(String),
-    NamedValue { negated: bool, name: String, value: String },
+    NamedValue {
+        negated: bool,
+        name: String,
+        value: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
