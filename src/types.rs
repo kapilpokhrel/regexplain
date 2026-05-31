@@ -15,8 +15,8 @@ pub enum RegExplainSimplifiedNode {
     Flags(FlagNode),
     Literal(LiteralNode),
     Assertion(AssertionNode),
-    Alt(Vec<RegExplainSimplifiedNode>),
-    Concat(Vec<RegExplainSimplifiedNode>),
+    Alt   { span: Span, alts:  Vec<RegExplainSimplifiedNode> },
+    Concat { span: Span, nodes: Vec<RegExplainSimplifiedNode> },
     Class(ClassNode),
     Group(GroupNode),
     Repeat(RepeatNode),
@@ -74,11 +74,13 @@ pub enum ClassKind {
     AsciiXdigit,
     Unicode(UnicodeClassKind),
     Bracketed(Vec<ClassItem>),
-    BracketedOp {
-        op: ClassBinaryOp,
-        lhs: Box<ClassKind>,
-        rhs: Box<ClassKind>,
-    },
+    BracketedOp { op: ClassBinaryOp, lhs: ClassOperand, rhs: ClassOperand },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassOperand {
+    pub span: Span,
+    pub kind: Box<ClassKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

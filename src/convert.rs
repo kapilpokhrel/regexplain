@@ -67,7 +67,7 @@ where
 impl From<&Ast> for RegExplainSimplifiedNode {
     fn from(ast: &Ast) -> Self {
         match ast {
-            Ast::Empty(_) => Self::Concat(vec![]),
+            Ast::Empty(_) => Self::Concat { span: Span { start: 0, end: 0 }, nodes: vec![] },
             Ast::Dot(s) => Self::Class(ClassNode {
                 span: span(s),
                 negated: false,
@@ -81,13 +81,14 @@ impl From<&Ast> for RegExplainSimplifiedNode {
             Ast::ClassBracketed(c) => Self::Class(ClassNode::from(c.as_ref())),
             Ast::ClassUnicode(c) => Self::Class(ClassNode::from(c.as_ref())),
             Ast::ClassPerl(c) => Self::Class(ClassNode::from(c.as_ref())),
-            Ast::Alternation(a) => Self::Alt(a.asts.iter().map(Self::from).collect()),
+            Ast::Alternation(a) => Self::Alt {
+                span: span(&a.span),
+                alts: a.asts.iter().map(Self::from).collect(),
+            },
             Ast::Concat(c) => {
-                let mut out: Vec<RegExplainSimplifiedNode> = Vec::new();
+                let mut nodes: Vec<RegExplainSimplifiedNode> = Vec::new();
                 let mut items = c.asts.iter().map(RegExplainSimplifiedNode::from);
                 while let Some(mut node) = items.next() {
-                    // If the node is varbatim litera, we need to check if other upcomming nodes are varbatim literals
-                    // if yes, merge them all into one
                     if let RegExplainSimplifiedNode::Literal(LiteralNode {
                         ch: LiteralChar::Verbatim(_),
                         ..
@@ -95,9 +96,9 @@ impl From<&Ast> for RegExplainSimplifiedNode {
                     {
                         merge_verbatim(&mut node, &mut items);
                     }
-                    out.push(node)
+                    nodes.push(node)
                 }
-                Self::Concat(out)
+                Self::Concat { span: span(&c.span), nodes }
             }
         }
     }
@@ -273,9 +274,40 @@ impl From<&ast::ClassSet> for ClassKind {
             ast::ClassSet::Item(item) => ClassKind::Bracketed(collect_items(item)),
             ast::ClassSet::BinaryOp(op) => ClassKind::BracketedOp {
                 op: ClassBinaryOp::from(op.kind),
-                lhs: Box::new(ClassKind::from(op.lhs.as_ref())),
-                rhs: Box::new(ClassKind::from(op.rhs.as_ref())),
+                lhs: ClassOperand {
+                    span: Span::from(op.lhs.as_ref()),
+                    kind: Box::new(ClassKind::from(op.lhs.as_ref())),
+                },
+                rhs: ClassOperand {
+                    span: Span::from(op.rhs.as_ref()),
+                    kind: Box::new(ClassKind::from(op.rhs.as_ref())),
+                },
             },
+        }
+    }
+}
+
+impl From<&ast::ClassSet> for Span {
+    fn from(s : &ast::ClassSet) -> Self {
+        match s {
+            ast::ClassSet::Item(item) => {
+                let items_spans: Vec<Span> = collect_items(item).into_iter().map(|x| {
+                    match x {
+                        ClassItem::Literal(l) => l.span,
+                        ClassItem::Range{span: s, ..} => s,
+                        ClassItem::Class(c) => c.span
+                    }
+                }).collect();
+                if items_spans.is_empty() {
+                    Span{start: 0, end: 0}
+                } else {
+                    Span{
+                        start: items_spans.first().unwrap().start,
+                        end: items_spans.last().unwrap().end
+                    }
+                }
+            }
+            ast::ClassSet::BinaryOp(op) => span(&op.span)
         }
     }
 }

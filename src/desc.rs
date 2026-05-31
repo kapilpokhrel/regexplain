@@ -30,15 +30,13 @@ impl From<RegExplainSimplifiedNode> for DescNode {
             RegExplainSimplifiedNode::Class(c)     => c.into(),
             RegExplainSimplifiedNode::Group(g)     => g.into(),
             RegExplainSimplifiedNode::Repeat(r)    => r.into(),
-            RegExplainSimplifiedNode::Alt(a) => DescNode {
-                // i think span can be calculated from a[0].span.start to a[a.len()-1].span.end
+            RegExplainSimplifiedNode::Alt { alts, .. } => DescNode {
                 desc: "Selects one of the matches from the following list".into(),
-                nested_items: a.into_iter().map(Self::from).collect(),
+                nested_items: alts.into_iter().map(Self::from).collect(),
             },
-            RegExplainSimplifiedNode::Concat(c) => DescNode {
-                // i think span can be calculated from a[0].span.start to a[a.len()-1].span.end
+            RegExplainSimplifiedNode::Concat { nodes, .. } => DescNode {
                 desc: String::new(),
-                nested_items: c.into_iter().map(Self::from).collect(),
+                nested_items: nodes.into_iter().map(Self::from).collect(),
             },
         }
     }
@@ -161,9 +159,12 @@ impl From<ClassNode> for DescNode {
                     format!("matches any character with {} {} {}", name, if nv^negated { "not equals to" } else { "equals to" }, value)
                 }
             }),
-            ClassKind::Bracketed(items) => DescNode {
-                desc: format!("matches any one character that is {} in the list below", neg),
-                nested_items: items.into_iter().map(DescNode::from).collect(),
+            ClassKind::Bracketed(items) => {
+                let neg = if negated { "not in" } else { "in" };
+                DescNode {
+                    desc: format!("matches any one character that is {} the list below", neg),
+                    nested_items: items.into_iter().map(DescNode::from).collect(),
+                }
             },
             ClassKind::BracketedOp { op, lhs, rhs } => {
                 let neg = if negated { "not in" } else { "in" };
@@ -172,18 +173,16 @@ impl From<ClassNode> for DescNode {
                     ClassBinaryOp::Difference          => "first list but not in second list",
                     ClassBinaryOp::SymmetricDifference => "first list or in second list but not in both lists",
                 };
-                let to_desc = |k: Box<ClassKind>| DescNode::from(ClassNode {
-                    // need to find a representation that also preserves the start/end of lhs and rhs
-                    // i think lsh and rsh should be vector of class items
-                    span: Span { start: 0, end: 0 },
+                let to_desc = |op: ClassOperand| DescNode::from(ClassNode {
+                    span: op.span,
                     negated: false,
-                    kind: *k,
+                    kind: *op.kind,
                 });
                 DescNode {
                     desc: format!("matches any character that is {} {}", neg, op_str),
                     nested_items: vec![
-                        DescNode{ desc: "1st list".into(), nested_items: vec![to_desc(lhs)] },
-                        DescNode{ desc: "2nd list".into(), nested_items: vec![to_desc(rhs)] }
+                        DescNode { desc: "1st list".into(), nested_items: vec![to_desc(lhs)] },
+                        DescNode { desc: "2nd list".into(), nested_items: vec![to_desc(rhs)] },
                     ],
                 }
             }
@@ -203,17 +202,17 @@ impl From<ClassItem> for DescNode {
 
 impl From<RepeatNode> for DescNode {
     fn from(value: RepeatNode) -> Self {
-        let count = match (value.min, value.max) {
-            (0, Some(1)) => "optionally".into(),
-            (0, None)    => "0 or more times".into(),
-            (1, None)    => "1 or more times".into(),
-            (n, Some(m)) if n == m => format!("exactly {} time(s)", n),
-            (lo, None)   => format!("{} or more times", lo),
-            (lo, Some(hi)) => format!("{} to {} times", lo, hi),
-        };
         let greedy = if value.greedy { " (greedy)" } else { " (lazy)" };
+        let count_eval = match (value.min, value.max) {
+            (0, Some(1)) => "optionally".to_string() + greedy,
+            (0, None)    => "0 or more times".to_string() + greedy,
+            (1, None)    => "1 or more times".to_string() + greedy,
+            (n, Some(m)) if n == m => format!("exactly {} time(s)", n), // no need to show lazy or greedy for exact
+            (lo, None)   => format!("{} or more times", lo) + greedy,
+            (lo, Some(hi)) => format!("{} to {} times", lo, hi) + greedy,
+        };
         let mut inner = DescNode::from(*value.inner);
-        inner.desc.push_str(&format!(", {}{}", count, greedy));
+        inner.desc.push_str(&format!(", {}", count_eval));
         inner
     }
 }
