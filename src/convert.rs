@@ -1,3 +1,5 @@
+use std::iter::Peekable;
+
 use regex_syntax::ast::parse::Parser;
 use regex_syntax::ast::{self, Ast};
 
@@ -44,7 +46,7 @@ fn collect_items(item: &ast::ClassSetItem) -> Vec<ClassItem> {
     }
 }
 
-fn merge_verbatim<I>(first: &mut RegExplainSimplifiedNode, items: &mut I)
+fn merge_verbatim<I>(first: &mut RegExplainSimplifiedNode, items: &mut Peekable<I>)
 where
     I: Iterator<Item = RegExplainSimplifiedNode>,
 {
@@ -54,12 +56,13 @@ where
     }) = first
     {
         while let Some(RegExplainSimplifiedNode::Literal(LiteralNode {
-            ch: LiteralChar::Verbatim(ref next_ch),
+            ch: LiteralChar::Verbatim(next_ch),
             span: s,
-        })) = items.next()
+        })) = items.peek()
         {
             curr_span.end = s.end;
             curr_ch.push_str(next_ch);
+            items.next();
         }
     }
 }
@@ -87,7 +90,7 @@ impl From<&Ast> for RegExplainSimplifiedNode {
             },
             Ast::Concat(c) => {
                 let mut nodes: Vec<RegExplainSimplifiedNode> = Vec::new();
-                let mut items = c.asts.iter().map(RegExplainSimplifiedNode::from);
+                let mut items = c.asts.iter().map(RegExplainSimplifiedNode::from).peekable();
                 while let Some(mut node) = items.next() {
                     if let RegExplainSimplifiedNode::Literal(LiteralNode {
                         ch: LiteralChar::Verbatim(_),
