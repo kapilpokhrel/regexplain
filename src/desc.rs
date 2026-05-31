@@ -3,48 +3,67 @@ use crate::types::*;
 pub struct DescNode {
     pub desc: String,
     pub nested_items: Vec<DescNode>,
+    pub match_str: String,
 }
 
-impl DescNode {
-    fn leaf(desc: impl Into<String>) -> Self {
-        DescNode { desc: desc.into(), nested_items: vec![] }
+pub struct SymbolTable {
+    pattern: String,
+} // I don't know what else to call it lol
+
+pub struct DescGenerator {
+    sym_table: SymbolTable
+}
+
+impl DescGenerator {
+    pub fn new(pattern: impl Into<String>) -> Self {
+        Self {
+            sym_table: SymbolTable{pattern: pattern.into()}
+        }
     }
 
-    pub fn print(&self, indent: usize) {
-        if !self.desc.is_empty() {
-            println!("{}{}", "  ".repeat(indent), self.desc);
-        }
-        let child_indent = if self.desc.is_empty() { indent } else { indent + 1 };
-        for child in &self.nested_items {
-            child.print(child_indent);
-        }
+    fn get_match_str_from_span(&self, s: Span) -> String {
+        self.sym_table.pattern[s.start..s.end].into()
+    }
+
+    fn leaf_from_span(&self, s: Span, desc: impl Into<String>) -> DescNode {
+        DescNode { match_str: self.get_match_str_from_span(s), desc: desc.into(), nested_items: vec![] }
+    }
+
+    fn leaf_from_str(&self, s: impl Into<String>, desc: impl Into<String>) -> DescNode {
+        DescNode { match_str: s.into(), desc: desc.into(), nested_items: vec![] }
     }
 }
 
-impl From<RegExplainSimplifiedNode> for DescNode {
-    fn from(value: RegExplainSimplifiedNode) -> Self {
-        match value {
-            RegExplainSimplifiedNode::Flags(f)     => f.into(),
-            RegExplainSimplifiedNode::Literal(l)   => l.into(),
-            RegExplainSimplifiedNode::Assertion(a) => a.into(),
-            RegExplainSimplifiedNode::Class(c)     => c.into(),
-            RegExplainSimplifiedNode::Group(g)     => g.into(),
-            RegExplainSimplifiedNode::Repeat(r)    => r.into(),
-            RegExplainSimplifiedNode::Alt { alts, .. } => DescNode {
+pub trait Describer<T> {
+    fn describe(&self, target: T) -> DescNode;
+}
+
+impl Describer<RegExplainSimplifiedNode> for DescGenerator {
+    fn describe(&self, target: RegExplainSimplifiedNode) -> DescNode {
+        match target {
+            RegExplainSimplifiedNode::Flags(f)     => self.describe(f),
+            RegExplainSimplifiedNode::Literal(l)   => self.describe(l),
+            RegExplainSimplifiedNode::Assertion(a) => self.describe(a),
+            RegExplainSimplifiedNode::Class(c)     => self.describe(c),
+            RegExplainSimplifiedNode::Group(g)     => self.describe(g),
+            RegExplainSimplifiedNode::Repeat(r)    => self.describe(r),
+            RegExplainSimplifiedNode::Alt { alts, span } => DescNode {
+                match_str: self.get_match_str_from_span(span),
                 desc: "Selects one of the matches from the following list".into(),
-                nested_items: alts.into_iter().map(Self::from).collect(),
+                nested_items: alts.into_iter().map(|x| self.describe(x)).collect(),
             },
-            RegExplainSimplifiedNode::Concat { nodes, .. } => DescNode {
+            RegExplainSimplifiedNode::Concat { span, nodes } => DescNode {
+                match_str: self.get_match_str_from_span(span),
                 desc: String::new(),
-                nested_items: nodes.into_iter().map(Self::from).collect(),
+                nested_items: nodes.into_iter().map(|x| self.describe(x)).collect(),
             },
         }
     }
 }
 
-impl From<LiteralNode> for DescNode {
-    fn from(value: LiteralNode) -> Self {
-        DescNode::leaf(match value.ch {
+impl Describer<LiteralNode> for DescGenerator {
+    fn describe(&self, target: LiteralNode) -> DescNode {
+        self.leaf_from_span(target.span, match target.ch {
             LiteralChar::Verbatim(s) => format!("matches \"{}\" literally", s),
             LiteralChar::Octal(s)   => format!("matches character {}, (octal escaped)", s),
             LiteralChar::Hex(s)     => format!("matches character {}, (hex escaped)", s),
@@ -61,9 +80,9 @@ impl From<LiteralNode> for DescNode {
     }
 }
 
-impl From<AssertionNode> for DescNode {
-    fn from(value: AssertionNode) -> Self {
-        DescNode::leaf(match value.kind {
+impl Describer<AssertionNode> for DescGenerator {
+    fn describe(&self, target: AssertionNode) -> DescNode {
+        self.leaf_from_span(target.span, match target.kind {
             AssertionKind::StartLine           => "asserts position at start of line",
             AssertionKind::EndLine             => "asserts position at the end of line",
             AssertionKind::StartText           => "asserts position at start of text",
@@ -78,36 +97,38 @@ impl From<AssertionNode> for DescNode {
     }
 }
 
-impl From<FlagItem> for DescNode {
-    fn from(item: FlagItem) -> Self {
-        DescNode::leaf(format!(
+impl Describer<FlagItem> for DescGenerator {
+    fn describe(&self, target: FlagItem) -> DescNode {
+        let flag_desc = match target.kind {
+            FlagKind::CaseInsensitive   => ('i', "case-insensitive matching"),
+            FlagKind::MultiLine         => ('m', "multi-line (^ and $ match line boundaries)"),
+            FlagKind::DotMatchesNewLine => ('s', "dot matches newline"),
+            FlagKind::SwapGreed         => ('U', "swap greediness"),
+            FlagKind::Unicode           => ('u', "Unicode mode"),
+            FlagKind::Crlf              => ('R', "CRLF line endings"),
+            FlagKind::IgnoreWhitespace  => ('x', "ignore whitespace and comments"),
+        };
+        self.leaf_from_str(flag_desc.0, format!(
             "{} {}",
-            if item.negated { "disable" } else { "enable" },
-            match item.kind {
-                FlagKind::CaseInsensitive   => "case-insensitive matching",
-                FlagKind::MultiLine         => "multi-line (^ and $ match line boundaries)",
-                FlagKind::DotMatchesNewLine => "dot matches newline",
-                FlagKind::SwapGreed         => "swap greediness",
-                FlagKind::Unicode           => "Unicode mode",
-                FlagKind::Crlf             => "CRLF line endings",
-                FlagKind::IgnoreWhitespace  => "ignore whitespace and comments",
-            }
+            if target.negated { "disable" } else { "enable" },
+            flag_desc.1
         ))
     }
 }
 
-impl From<FlagNode> for DescNode {
-    fn from(value: FlagNode) -> Self {
+impl Describer<FlagNode> for DescGenerator {
+    fn describe(&self, target: FlagNode) -> DescNode {
         DescNode {
+            match_str: self.get_match_str_from_span(target.span),
             desc: "enable/disable the following flags:".into(),
-            nested_items: value.items.into_iter().map(DescNode::from).collect(),
+            nested_items: target.items.into_iter().map(|x| self.describe(x)).collect(),
         }
     }
 }
 
-impl From<GroupNode> for DescNode {
-    fn from(value: GroupNode) -> Self {
-        let (header, mut nested) = match value.kind {
+impl Describer<GroupNode> for DescGenerator {
+    fn describe(&self, target: GroupNode) -> DescNode {
+        let (header, mut nested) = match target.kind {
             GroupKind::Capture { index, name: None } => {
                 (format!("capture group #{}", index), vec![])
             }
@@ -116,38 +137,38 @@ impl From<GroupNode> for DescNode {
             }
             GroupKind::NonCapturing(flags) => (
                 "non-capturing group".into(),
-                flags.into_iter().map(DescNode::from).collect(),
+                flags.into_iter().map(|x| self.describe(x)).collect(),
             ),
         };
-        nested.push((*value.inner).into());
-        DescNode { desc: header, nested_items: nested }
+        nested.push(self.describe(*target.inner));
+        DescNode { match_str: self.get_match_str_from_span(target.span), desc: header, nested_items: nested }
     }
 }
 
-impl From<ClassNode> for DescNode {
-    fn from(value: ClassNode) -> Self {
-        let negated = value.negated;
+impl Describer<ClassNode> for DescGenerator {
+    fn describe(&self, target: ClassNode) -> DescNode {
+        let negated = target.negated;
         let neg = if negated { "not a" } else { "a" };
-        match value.kind {
-            ClassKind::Dot       => DescNode::leaf("matches any character (except newline)"),
-            ClassKind::PerlDigit => DescNode::leaf(format!("matches any character this is {} digit 0 to 9 in any unicode script", neg)),
-            ClassKind::PerlSpace => DescNode::leaf(format!("matches any character that is {} whitespace character in any unicode script", neg)),
-            ClassKind::PerlWord  => DescNode::leaf(format!("matches anything that is {} word character in any unicode script", neg)),
-            ClassKind::AsciiAlnum  => DescNode::leaf(format!("matches any character that is {} alphanumeric ASCII, same as [0-9A-Za-z]", neg)),
-            ClassKind::AsciiAlpha  => DescNode::leaf(format!("matches any character that is {} ASCII letter, same as [A-Za-z]", neg)),
-            ClassKind::AsciiAscii  => DescNode::leaf(format!("matches any character that is {} ASCII character, same as [\\x00-\\x7F]", neg)),
-            ClassKind::AsciiBlank  => DescNode::leaf(format!("matches any character that is {} space or tab", neg)),
-            ClassKind::AsciiCntrl  => DescNode::leaf(format!("matches any character that is {} ASCII control character, same as [\\x00-\\x1F\\x7F]", neg)),
-            ClassKind::AsciiDigit  => DescNode::leaf(format!("matches any character that is {} ASCII digit, same as [0-9]", neg)),
-            ClassKind::AsciiGraph  => DescNode::leaf(format!("matches any character that is {} visible ASCII character, same as [!-~]", neg)),
-            ClassKind::AsciiLower  => DescNode::leaf(format!("matches any character that is {} ASCII lowercase letter, same as [a-z]", neg)),
-            ClassKind::AsciiPrint  => DescNode::leaf(format!("matches any character that is {} printable ASCII character, same as [ -~]", neg)),
-            ClassKind::AsciiPunct  => DescNode::leaf(format!("matches any character that is {} ASCII punctuation, same as [!-/:-@\\[-`{{-~]", neg)),
-            ClassKind::AsciiSpace  => DescNode::leaf(format!("matches any character that is {} ASCII whitespace, same as [ \\t\\r\\n\\f\\v]", neg)),
-            ClassKind::AsciiUpper  => DescNode::leaf(format!("matches any character that is {} ASCII uppercase letter, same as [A-Z]", neg)),
-            ClassKind::AsciiWord   => DescNode::leaf(format!("matches any character that is {} ASCII word character, same as [0-9A-Za-z_]", neg)),
-            ClassKind::AsciiXdigit => DescNode::leaf(format!("matches any character that is {} hex digit, same as [0-9A-Fa-f]", neg)),
-            ClassKind::Unicode(u) => DescNode::leaf(match u {
+        match target.kind {
+            ClassKind::Dot       => self.leaf_from_span(target.span, "matches any character (except newline)"),
+            ClassKind::PerlDigit => self.leaf_from_span(target.span, format!("matches any character this is {} digit 0 to 9 in any unicode script", neg)),
+            ClassKind::PerlSpace => self.leaf_from_span(target.span, format!("matches any character that is {} whitespace character in any unicode script", neg)),
+            ClassKind::PerlWord  => self.leaf_from_span(target.span, format!("matches anything that is {} word character in any unicode script", neg)),
+            ClassKind::AsciiAlnum  => self.leaf_from_span(target.span, format!("matches any character that is {} alphanumeric ASCII, same as [0-9A-Za-z]", neg)),
+            ClassKind::AsciiAlpha  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII letter, same as [A-Za-z]", neg)),
+            ClassKind::AsciiAscii  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII character, same as [\\x00-\\x7F]", neg)),
+            ClassKind::AsciiBlank  => self.leaf_from_span(target.span, format!("matches any character that is {} space or tab", neg)),
+            ClassKind::AsciiCntrl  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII control character, same as [\\x00-\\x1F\\x7F]", neg)),
+            ClassKind::AsciiDigit  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII digit, same as [0-9]", neg)),
+            ClassKind::AsciiGraph  => self.leaf_from_span(target.span, format!("matches any character that is {} visible ASCII character, same as [!-~]", neg)),
+            ClassKind::AsciiLower  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII lowercase letter, same as [a-z]", neg)),
+            ClassKind::AsciiPrint  => self.leaf_from_span(target.span, format!("matches any character that is {} printable ASCII character, same as [ -~]", neg)),
+            ClassKind::AsciiPunct  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII punctuation, same as [!-/:-@\\[-`{{-~]", neg)),
+            ClassKind::AsciiSpace  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII whitespace, same as [ \\t\\r\\n\\f\\v]", neg)),
+            ClassKind::AsciiUpper  => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII uppercase letter, same as [A-Z]", neg)),
+            ClassKind::AsciiWord   => self.leaf_from_span(target.span, format!("matches any character that is {} ASCII word character, same as [0-9A-Za-z_]", neg)),
+            ClassKind::AsciiXdigit => self.leaf_from_span(target.span, format!("matches any character that is {} hex digit, same as [0-9A-Fa-f]", neg)),
+            ClassKind::Unicode(u) => self.leaf_from_span(target.span, match u {
                 UnicodeClassKind::Named(s) => {
                     let neg = if negated { "doesn't satisfy" } else { "satisfies" };
                     // i should explain the name as well, like Lu should become Uppercase_Letter, etc
@@ -162,8 +183,9 @@ impl From<ClassNode> for DescNode {
             ClassKind::Bracketed(items) => {
                 let neg = if negated { "not in" } else { "in" };
                 DescNode {
+                    match_str: self.get_match_str_from_span(target.span),
                     desc: format!("matches any one character that is {} the list below", neg),
-                    nested_items: items.into_iter().map(DescNode::from).collect(),
+                    nested_items: items.into_iter().map(|x| self.describe(x)).collect(),
                 }
             },
             ClassKind::BracketedOp { op, lhs, rhs } => {
@@ -173,37 +195,55 @@ impl From<ClassNode> for DescNode {
                     ClassBinaryOp::Difference          => "first list but not in second list",
                     ClassBinaryOp::SymmetricDifference => "first list or in second list but not in both lists",
                 };
-                let to_desc = |op: ClassOperand| DescNode::from(ClassNode {
-                    span: op.span,
-                    negated: false,
-                    kind: *op.kind,
-                });
+
                 DescNode {
+                    match_str: self.get_match_str_from_span(target.span),
                     desc: format!("matches any character that is {} {}", neg, op_str),
                     nested_items: vec![
-                        DescNode { desc: "1st list".into(), nested_items: vec![to_desc(lhs)] },
-                        DescNode { desc: "2nd list".into(), nested_items: vec![to_desc(rhs)] },
+                        DescNode {
+                            match_str: self.get_match_str_from_span(lhs.span),
+                            desc: "1st list".into(), nested_items: vec![self.describe(lhs)]
+                        },
+                        DescNode {
+                            match_str: self.get_match_str_from_span(rhs.span),
+                            desc: "2nd list".into(), nested_items: vec![self.describe(rhs)]
+                        },
                     ],
                 }
             }
         }
+
     }
 }
 
-impl From<ClassItem> for DescNode {
-    fn from(item: ClassItem) -> Self {
-        match item {
-            ClassItem::Literal(l)             => l.into(),
-            ClassItem::Range { start, end, .. } => DescNode::leaf(format!("matches anything from '{}' to '{}'", start, end)),
-            ClassItem::Class(c)               => c.into(),
+
+impl Describer<ClassOperand> for DescGenerator {
+    fn describe(&self, target: ClassOperand) -> DescNode {
+        match *target.kind {
+            ClassKind::Bracketed(items) => DescNode {
+                match_str: self.get_match_str_from_span(target.span),
+                desc: String::new(),
+                nested_items: items.into_iter().map(|x| self.describe(x)).collect(),
+            },
+            other => self.describe(ClassNode { span: target.span, negated: false, kind: other }),
         }
     }
 }
 
-impl From<RepeatNode> for DescNode {
-    fn from(value: RepeatNode) -> Self {
-        let greedy = if value.greedy { " (greedy)" } else { " (lazy)" };
-        let count_eval = match (value.min, value.max) {
+impl Describer<ClassItem> for DescGenerator {
+    fn describe(&self, target: ClassItem) -> DescNode {
+        match target {
+            ClassItem::Literal(l)             => self.describe(l),
+            ClassItem::Range { span, start, end } => self.leaf_from_span(span, format!("matches anything from '{}' to '{}'", start, end)),
+            ClassItem::Class(c)               => self.describe(c),
+        }
+    }
+}
+
+impl Describer<RepeatNode> for DescGenerator {
+    fn describe(&self, target: RepeatNode) -> DescNode {
+        let greedy = if target.greedy { " (greedy)" } else { " (lazy)" };
+        let count_eval = match (target.min, target.max) {
             (0, Some(1)) => "optionally".to_string() + greedy,
             (0, None)    => "0 or more times".to_string() + greedy,
             (1, None)    => "1 or more times".to_string() + greedy,
@@ -211,8 +251,20 @@ impl From<RepeatNode> for DescNode {
             (lo, None)   => format!("{} or more times", lo) + greedy,
             (lo, Some(hi)) => format!("{} to {} times", lo, hi) + greedy,
         };
-        let mut inner = DescNode::from(*value.inner);
+        let mut inner = self.describe(*target.inner);
         inner.desc.push_str(&format!(", {}", count_eval));
         inner
+    }
+}
+
+impl DescNode {
+    pub fn print(&self, indent: usize) {
+        if !self.desc.is_empty() {
+            println!("{}`{}` {}", "  ".repeat(indent), self.match_str, self.desc);
+        }
+        let child_indent = if self.desc.is_empty() { indent } else { indent + 1 };
+        for child in &self.nested_items {
+            child.print(child_indent);
+        }
     }
 }

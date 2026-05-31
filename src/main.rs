@@ -1,3 +1,5 @@
+use crate::desc::{DescGenerator, Describer};
+
 mod types;
 mod convert;
 mod desc;
@@ -12,8 +14,9 @@ fn main() {
         Ok(form) => {
             println!("pattern: {}\n", form.pattern);
             println!("{:#?}", form.root);
-            println!("\nExplanation:\n");
-            desc::DescNode::from(form.root).print(0);
+
+            let desc_generator = DescGenerator::new(form.pattern);
+            desc_generator.describe(form.root).print(0);
         }
         Err(e) => {
             eprintln!("parse error: {}", e);
