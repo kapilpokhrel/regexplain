@@ -1,4 +1,5 @@
 use crate::types::*;
+use std::collections::HashSet;
 
 pub struct DescNode {
     pub desc: String,
@@ -8,16 +9,20 @@ pub struct DescNode {
 
 pub struct SymbolTable {
     pattern: String,
+    effective_flags: HashSet<char>
 } // I don't know what else to call it lol
 
 pub struct DescGenerator {
-    sym_table: SymbolTable
+    sym_table: SymbolTable,
 }
 
 impl DescGenerator {
     pub fn new(pattern: impl Into<String>) -> Self {
         Self {
-            sym_table: SymbolTable{pattern: pattern.into()}
+            sym_table: SymbolTable{
+                pattern: pattern.into(),
+                effective_flags: HashSet::new(),
+            }
         }
     }
 
@@ -35,11 +40,11 @@ impl DescGenerator {
 }
 
 pub trait Describer<T> {
-    fn describe(&self, target: T) -> DescNode;
+    fn describe(&mut self, target: T) -> DescNode;
 }
 
 impl Describer<RegExplainSimplifiedNode> for DescGenerator {
-    fn describe(&self, target: RegExplainSimplifiedNode) -> DescNode {
+    fn describe(&mut self, target: RegExplainSimplifiedNode) -> DescNode {
         match target {
             RegExplainSimplifiedNode::Flags(f)     => self.describe(f),
             RegExplainSimplifiedNode::Literal(l)   => self.describe(l),
@@ -62,9 +67,10 @@ impl Describer<RegExplainSimplifiedNode> for DescGenerator {
 }
 
 impl Describer<LiteralNode> for DescGenerator {
-    fn describe(&self, target: LiteralNode) -> DescNode {
+    fn describe(&mut self, target: LiteralNode) -> DescNode {
+        let case = if self.sym_table.effective_flags.contains(&'i') {"[case insensative]"} else {"[case sensative]"};
         self.leaf_from_span(target.span, match target.ch {
-            LiteralChar::Verbatim(s) => format!("matches \"{}\" literally", s),
+            LiteralChar::Verbatim(s) => format!("matches \"{}\" literally {}", s, case),
             LiteralChar::Octal(s)   => format!("matches character {}, (octal escaped)", s),
             LiteralChar::Hex(s)     => format!("matches character {}, (hex escaped)", s),
             LiteralChar::Special(s) => match s {
@@ -81,7 +87,7 @@ impl Describer<LiteralNode> for DescGenerator {
 }
 
 impl Describer<AssertionNode> for DescGenerator {
-    fn describe(&self, target: AssertionNode) -> DescNode {
+    fn describe(&mut self, target: AssertionNode) -> DescNode {
         self.leaf_from_span(target.span, match target.kind {
             AssertionKind::StartLine           => "asserts position at start of line",
             AssertionKind::EndLine             => "asserts position at the end of line",
@@ -97,37 +103,50 @@ impl Describer<AssertionNode> for DescGenerator {
     }
 }
 
+fn get_flag_info(kind: FlagKind) -> (char, &'static str) {
+    match kind {
+        FlagKind::CaseInsensitive   => ('i', "case-insensitive matching"),
+        FlagKind::MultiLine         => ('m', "multi-line (^ and $ match line boundaries)"),
+        FlagKind::DotMatchesNewLine => ('s', "dot matches newline"),
+        FlagKind::SwapGreed         => ('U', "swap greediness"),
+        FlagKind::Unicode           => ('u', "Unicode mode"),
+        FlagKind::Crlf              => ('R', "CRLF line endings"),
+        FlagKind::IgnoreWhitespace  => ('x', "ignore whitespace and comments"),
+    }
+}
+
 impl Describer<FlagItem> for DescGenerator {
-    fn describe(&self, target: FlagItem) -> DescNode {
-        let flag_desc = match target.kind {
-            FlagKind::CaseInsensitive   => ('i', "case-insensitive matching"),
-            FlagKind::MultiLine         => ('m', "multi-line (^ and $ match line boundaries)"),
-            FlagKind::DotMatchesNewLine => ('s', "dot matches newline"),
-            FlagKind::SwapGreed         => ('U', "swap greediness"),
-            FlagKind::Unicode           => ('u', "Unicode mode"),
-            FlagKind::Crlf              => ('R', "CRLF line endings"),
-            FlagKind::IgnoreWhitespace  => ('x', "ignore whitespace and comments"),
-        };
-        self.leaf_from_str(flag_desc.0, format!(
+    fn describe(&mut self, target: FlagItem) -> DescNode {
+        let (flag_sym, flag_desc) = get_flag_info(target.kind);
+        if target.negated {
+            self.sym_table.effective_flags.remove(&flag_sym);
+        } else {
+            self.sym_table.effective_flags.insert(flag_sym);
+        }
+        self.leaf_from_str(flag_sym, format!(
             "{} {}",
             if target.negated { "disable" } else { "enable" },
-            flag_desc.1
+            flag_desc
         ))
     }
 }
 
 impl Describer<FlagNode> for DescGenerator {
-    fn describe(&self, target: FlagNode) -> DescNode {
+    fn describe(&mut self, target: FlagNode) -> DescNode {
+        let nested_items: Vec<DescNode> = target.items.into_iter().map(|x| self.describe(x)).collect();
+        let effective_flags_str: String = self.sym_table.effective_flags.iter().collect();
         DescNode {
             match_str: self.get_match_str_from_span(target.span),
-            desc: "enable/disable the following flags:".into(),
-            nested_items: target.items.into_iter().map(|x| self.describe(x)).collect(),
+            desc: format!("enable/disable the following flags; effective flags for the remainder of this group: [{}]", effective_flags_str),
+            nested_items,
         }
     }
 }
 
 impl Describer<GroupNode> for DescGenerator {
-    fn describe(&self, target: GroupNode) -> DescNode {
+    fn describe(&mut self, target: GroupNode) -> DescNode {
+        // clones the old effective_flags
+        let old_flags = self.sym_table.effective_flags.clone();
         let (header, mut nested) = match target.kind {
             GroupKind::Capture { index, name: None } => {
                 (format!("capture group #{}", index), vec![])
@@ -135,18 +154,29 @@ impl Describer<GroupNode> for DescGenerator {
             GroupKind::Capture { index, name: Some(name) } => {
                 (format!("capture group #{} named \"{}\"", index, name), vec![])
             }
-            GroupKind::NonCapturing(flags) => (
-                "non-capturing group".into(),
-                flags.into_iter().map(|x| self.describe(x)).collect(),
-            ),
+            GroupKind::NonCapturing(flags) => {
+                let flags_node: Vec<DescNode> = flags.into_iter().map(|x| self.describe(x)).collect();
+                let effective_flags_str: String = self.sym_table.effective_flags.iter().collect();
+                let effective_flags_suffix = if !flags_node.is_empty() {
+                    format!(" with effective flags: [{}]", effective_flags_str)
+                } else {
+                    "".into()
+                };
+                (
+                    format!("non-capturing group{}", effective_flags_suffix),
+                    flags_node,
+                )
+            }
         };
         nested.push(self.describe(*target.inner));
+        // replace with old effective_flags
+        self.sym_table.effective_flags = old_flags;
         DescNode { match_str: self.get_match_str_from_span(target.span), desc: header, nested_items: nested }
     }
 }
 
 impl Describer<ClassNode> for DescGenerator {
-    fn describe(&self, target: ClassNode) -> DescNode {
+    fn describe(&mut self, target: ClassNode) -> DescNode {
         let negated = target.negated;
         let neg = if negated { "not a" } else { "a" };
         match target.kind {
@@ -216,9 +246,8 @@ impl Describer<ClassNode> for DescGenerator {
     }
 }
 
-
 impl Describer<ClassOperand> for DescGenerator {
-    fn describe(&self, target: ClassOperand) -> DescNode {
+    fn describe(&mut self, target: ClassOperand) -> DescNode {
         match *target.kind {
             ClassKind::Bracketed(items) => DescNode {
                 match_str: self.get_match_str_from_span(target.span),
@@ -231,7 +260,7 @@ impl Describer<ClassOperand> for DescGenerator {
 }
 
 impl Describer<ClassItem> for DescGenerator {
-    fn describe(&self, target: ClassItem) -> DescNode {
+    fn describe(&mut self, target: ClassItem) -> DescNode {
         match target {
             ClassItem::Literal(l)             => self.describe(l),
             ClassItem::Range { span, start, end } => self.leaf_from_span(span, format!("matches anything from '{}' to '{}'", start, end)),
@@ -241,7 +270,7 @@ impl Describer<ClassItem> for DescGenerator {
 }
 
 impl Describer<RepeatNode> for DescGenerator {
-    fn describe(&self, target: RepeatNode) -> DescNode {
+    fn describe(&mut self, target: RepeatNode) -> DescNode {
         let greedy = if target.greedy { " (greedy)" } else { " (lazy)" };
         let count_eval = match (target.min, target.max) {
             (0, Some(1)) => "optionally".to_string() + greedy,
@@ -252,6 +281,9 @@ impl Describer<RepeatNode> for DescGenerator {
             (lo, Some(hi)) => format!("{} to {} times", lo, hi) + greedy,
         };
         let mut inner = self.describe(*target.inner);
+        // inner's match_str will be used when colouring; for now we just need to show full span of repetation
+        // repetation match will have a same color as last color of inner
+        inner.match_str = self.get_match_str_from_span(target.span);
         inner.desc.push_str(&format!(", {}", count_eval));
         inner
     }

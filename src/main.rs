@@ -13,9 +13,7 @@ fn main() {
     match convert::parse_and_convert(&pattern) {
         Ok(form) => {
             println!("pattern: {}\n", form.pattern);
-            println!("{:#?}", form.root);
-
-            let desc_generator = DescGenerator::new(form.pattern);
+            let mut desc_generator = DescGenerator::new(form.pattern);
             desc_generator.describe(form.root).print(0);
         }
         Err(e) => {
