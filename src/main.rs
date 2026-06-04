@@ -5,13 +5,21 @@ mod types;
 mod convert;
 mod desc;
 mod colorize;
+mod tree;
+mod tui;
 
 
 fn main() {
-    let pattern = std::env::args().nth(1).unwrap_or_else(|| {
-        eprintln!("Usage: regexplain <pattern>");
-        std::process::exit(1);
-    });
+    let pattern = match std::env::args().nth(1) {
+        Some(p) => p,
+        None => {
+            if let Err(e) = tui::run() {
+                eprintln!("tui error: {}", e);
+                std::process::exit(1);
+            }
+            return;
+        }
+    };
 
     match convert::parse_and_convert(&pattern) {
         Ok(form) => {
