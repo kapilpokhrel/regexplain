@@ -22,6 +22,21 @@ pub enum RegExplainSimplifiedNode {
     Repeat(RepeatNode),
 }
 
+impl RegExplainSimplifiedNode {
+    pub fn span(&self) -> Span {
+        match self {
+            Self::Flags(f)            => f.span,
+            Self::Literal(l)          => l.span,
+            Self::Assertion(a)        => a.span,
+            Self::Class(c)            => c.span,
+            Self::Group(g)            => g.span,
+            Self::Repeat(r)           => r.span,
+            Self::Alt { span, .. }    => *span,
+            Self::Concat { span, .. } => *span,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RepeatNode {
     pub span: Span,
@@ -160,6 +175,7 @@ pub struct FlagNode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagItem {
+    pub span: Span,
     pub negated: bool,
     pub kind: FlagKind,
 }

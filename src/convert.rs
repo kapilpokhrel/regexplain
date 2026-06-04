@@ -31,6 +31,7 @@ fn flags_items(flags: &ast::Flags) -> Vec<FlagItem> {
                 None
             }
             ast::FlagsItemKind::Flag(f) => Some(FlagItem {
+                span: span(&item.span),
                 negated,
                 kind: FlagKind::from(f),
             }),
