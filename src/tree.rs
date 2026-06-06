@@ -1,92 +1,137 @@
-use std::collections::HashSet;
-
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    text::{Line, Span, Text},
+    widgets::{Paragraph, Widget, Wrap},
 };
 
-// ── Public node type ──────────────────────────────────────────────────────────
-
 pub struct Node {
-    pub line: Line<'static>,
+    pub text: Text<'static>,
     pub children: Vec<Node>,
+    pub opened: bool,
 }
 
-// ── Internal flattened view ───────────────────────────────────────────────────
+impl Node {
+    pub fn new(text: impl Into<Text<'static>>, children: Vec<Node>) -> Self {
+        Self {
+            text: text.into(),
+            children,
+            opened: false,
+        }
+    }
+}
 
 struct Flat<'a> {
     node: &'a Node,
     path: Vec<usize>,
     depth: usize,
-    first_sibling: bool, // true → no separator before this item
+    root: bool,
 }
 
-fn flatten<'a>(
-    nodes: &'a [Node],
-    opened: &HashSet<Vec<usize>>,
-    path: &[usize],
-    depth: usize,
-    out: &mut Vec<Flat<'a>>,
-) {
+fn flatten_into<'a>(nodes: &'a [Node], path: &[usize], depth: usize, out: &mut Vec<Flat<'a>>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut p = path.to_vec();
         p.push(i);
-        out.push(Flat { node, path: p.clone(), depth, first_sibling: i == 0 });
-        if !node.children.is_empty() && opened.contains(&p) {
-            flatten(&node.children, opened, &p, depth + 1, out);
+        out.push(Flat {
+            node,
+            path: p.clone(),
+            depth,
+            root: i == 0,
+        });
+        if !node.children.is_empty() && node.opened {
+            flatten_into(&node.children, &p, depth + 1, out);
         }
     }
 }
 
-// ── Line wrapping ─────────────────────────────────────────────────────────────
-
-fn wrap_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
-    if width == 0 { return vec![line]; }
-    let mut result: Vec<Line<'static>> = Vec::new();
-    let mut current: Vec<Span<'static>> = Vec::new();
-    let mut col = 0usize;
-
-    for span in line.spans {
-        let style = span.style;
-        let mut remaining = span.content.into_owned();
-        while !remaining.is_empty() {
-            let space = width.saturating_sub(col);
-            if space == 0 {
-                result.push(Line::from(std::mem::take(&mut current)));
-                col = 0;
-                continue;
-            }
-            let take_n = remaining.chars().count().min(space);
-            let byte_end = remaining.char_indices()
-                .nth(take_n).map(|(i, _)| i).unwrap_or(remaining.len());
-            let chunk = remaining[..byte_end].to_string();
-            remaining = remaining[byte_end..].to_string();
-            col += chunk.chars().count();
-            current.push(Span::styled(chunk, style));
-            if col >= width {
-                result.push(Line::from(std::mem::take(&mut current)));
-                col = 0;
-            }
-        }
-    }
-    if !current.is_empty() || result.is_empty() {
-        result.push(Line::from(current));
-    }
-    result
+fn flatten(nodes: &[Node]) -> Vec<Flat<'_>> {
+    let mut out = Vec::new();
+    flatten_into(nodes, &[], 0, &mut out);
+    out
 }
 
-// ── Scrollbar ─────────────────────────────────────────────────────────────────
+fn compute_text_height(text: &Text<'static>, width: usize) -> usize {
+    if width == 0 { return 0; }
+    use textwrap::wrap;
+    let mut total = 0usize;
+    // `Text` is a collection of `Line`s, each `Line` is a collection of `Span`s.
+    // Concatenate span contents per logical line, then wrap that line.
+    for line in text.lines.iter() {
+        let mut s = String::new();
+        for span in line.spans.iter() {
+            s.push_str(span.content.as_ref());
+        }
+        total += wrap(&s, width).len().max(1);
+    }
+    total
+}
 
+struct ItemLayout {
+    sep: bool,
+    node_h: usize,
+    indent_width: usize,
+    para_width: usize,
+}
+
+impl ItemLayout {
+    fn layout_from_tree(tree: &TreeWidget, content_w: usize) -> (Vec<Self>, usize, Option<usize>) {
+        let flat = flatten(&tree.nodes);
+
+        let mut total_rows = 0usize;
+        let mut sel_row = None;
+        let item_layout: Vec<ItemLayout> = flat
+            .iter()
+            .map(|item| {
+                let sep = !item.root || item.depth > 0;
+                let indent_width = item.depth * 2 + 2; // + 2 because of the prefix symbol (▶/▼)
+                let para_width = content_w.saturating_sub(indent_width).max(1);
+                let node_h = compute_text_height(&item.node.text, para_width).max(1);
+                if item.path == tree.selected {
+                    sel_row = Some(total_rows + sep as usize);
+                }
+                total_rows += sep as usize + node_h;
+                ItemLayout {
+                    sep,
+                    node_h,
+                    indent_width,
+                    para_width,
+                }
+            })
+            .collect();
+        (item_layout, total_rows, sel_row)
+    }
+
+    fn rect(&self, area: Rect, row: u16, visible: u16 ) -> (Rect, Rect) {
+        let pfx_rect = Rect {
+            x: area.x,
+            y: row,
+            width: self.indent_width as u16,
+            height: visible,
+        };
+        let para_rect = Rect {
+            x: area.x + self.indent_width as u16,
+            y: row,
+            width: self.para_width as u16,
+            height: visible,
+        };
+        (pfx_rect, para_rect)
+    }
+}
+
+// scrollbar should be a seperate widget common for desctree and other scrollable widgets;
 fn draw_vscrollbar(buf: &mut Buffer, x: u16, y: u16, height: u16, total: usize, offset: usize) {
-    if height == 0 { return; }
+    if height == 0 {
+        return;
+    }
     let track = Style::default().fg(Color::DarkGray);
     let thumb = Style::default().fg(Color::Gray);
     if total <= height as usize {
         for row in 0..height {
-            if let Some(c) = buf.cell_mut((x, y + row)) { c.set_char('│'); c.set_style(track); }
+            if let Some(c) = buf.cell_mut((x, y + row)) {
+                c.set_char('│');
+                c.set_style(track);
+            }
         }
         return;
     }
@@ -95,150 +140,185 @@ fn draw_vscrollbar(buf: &mut Buffer, x: u16, y: u16, height: u16, total: usize, 
     let range = total - height as usize;
     let tt = ((offset as f64 / range as f64) * (height - th) as f64).round() as u16;
     for row in 0..height {
-        let (ch, st) = if row >= tt && row < tt + th { ('█', thumb) } else { ('│', track) };
-        if let Some(c) = buf.cell_mut((x, y + row)) { c.set_char(ch); c.set_style(st); }
+        let (ch, st) = if row >= tt && row < tt + th {
+            ('█', thumb)
+        } else {
+            ('│', track)
+        };
+        if let Some(c) = buf.cell_mut((x, y + row)) {
+            c.set_char(ch);
+            c.set_style(st);
+        }
     }
 }
 
-// ── TreeWidget ────────────────────────────────────────────────────────────────
-
 pub struct TreeWidget {
     nodes: Vec<Node>,
-    opened: HashSet<Vec<usize>>,
     selected: Vec<usize>,
     vscroll: usize,
 }
 
 impl TreeWidget {
     pub fn new() -> Self {
-        Self { nodes: Vec::new(), opened: HashSet::new(), selected: Vec::new(), vscroll: 0 }
+        Self {
+            nodes: Vec::new(),
+            selected: Vec::new(),
+            vscroll: 0,
+        }
     }
 
     pub fn set_nodes(&mut self, nodes: Vec<Node>) {
         self.nodes = nodes;
-        self.opened.clear();
         self.selected.clear();
         self.vscroll = 0;
     }
 
-    fn flat(&self) -> Vec<Flat<'_>> {
-        let mut out = Vec::new();
-        flatten(&self.nodes, &self.opened, &[], 0, &mut out);
-        out
-    }
-
-    fn get_node(&self, path: &[usize]) -> Option<&Node> {
-        let mut nodes = &self.nodes[..];
-        let mut node = None;
-        for &idx in path {
-            node = nodes.get(idx);
-            nodes = node.map(|n| n.children.as_slice()).unwrap_or(&[]);
+    fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
+        if path.is_empty() {
+            return None;
         }
-        node
+        let mut current = self.nodes.get_mut(path[0])?;
+        for &idx in &path[1..] {
+            current = current.children.get_mut(idx)?;
+        }
+        Some(current)
     }
 
     pub fn select_down(&mut self) {
-        let flat = self.flat();
-        if flat.is_empty() { return; }
-        if self.selected.is_empty() {
-            self.selected = flat[0].path.clone(); return;
+        let flat = flatten(&self.nodes);
+        if flat.is_empty() {
+            return;
         }
-        if let Some(i) = flat.iter().position(|f| f.path == self.selected) {
-            if i + 1 < flat.len() { self.selected = flat[i + 1].path.clone(); }
+        if self.selected.is_empty() {
+            self.selected = flat[0].path.clone();
+            return;
+        }
+        if let Some(i) = flat.iter().position(|f| f.path == self.selected)
+            && i + 1 < flat.len()
+        {
+            self.selected = flat[i + 1].path.clone();
         }
     }
 
     pub fn select_up(&mut self) {
-        let flat = self.flat();
-        if flat.is_empty() { return; }
-        if self.selected.is_empty() {
-            self.selected = flat.last().unwrap().path.clone(); return;
+        let flat = flatten(&self.nodes);
+        if flat.is_empty() {
+            return;
         }
-        if let Some(i) = flat.iter().position(|f| f.path == self.selected) {
-            if i > 0 { self.selected = flat[i - 1].path.clone(); }
+        if self.selected.is_empty() {
+            self.selected = flat.last().unwrap().path.clone();
+            return;
+        }
+        if let Some(i) = flat.iter().position(|f| f.path == self.selected)
+            && i > 0
+        {
+            self.selected = flat[i - 1].path.clone();
         }
     }
 
     /// Collapse if open, else move to parent.
     pub fn select_left(&mut self) {
-        if self.selected.is_empty() { return; }
-        if !self.opened.remove(&self.selected) && self.selected.len() > 1 {
+        if self.selected.is_empty() {
+            return;
+        }
+        let path = self.selected.clone();
+        if let Some(node) = self.get_node_mut(&path)
+            && node.opened
+        {
+            node.opened = false;
+            return;
+        }
+        if self.selected.len() > 1 {
             self.selected.pop();
         }
     }
 
     /// Expand if has children.
     pub fn select_right(&mut self) {
-        if self.selected.is_empty() { return; }
-        if self.get_node(&self.selected).map(|n| !n.children.is_empty()).unwrap_or(false) {
-            self.opened.insert(self.selected.clone());
+        let path = self.selected.clone();
+        if let Some(node) = self.get_node_mut(&path)
+            && !node.children.is_empty()
+        {
+            node.opened = true;
         }
     }
 
-    pub fn scroll_up(&mut self)   { self.vscroll = self.vscroll.saturating_sub(1); }
-    pub fn scroll_down(&mut self) { self.vscroll += 1; }
+    pub fn scroll_up(&mut self) {
+        self.vscroll = self.vscroll.saturating_sub(1);
+    }
+    pub fn scroll_down(&mut self) {
+        self.vscroll += 1;
+    }
+
+    fn seperator_style() -> Style {
+        Style::default().fg(Color::DarkGray)
+    }
+
+    fn selected_style() -> Style {
+        Style::default().bg(Color::DarkGray)
+    }
+
+    fn prefix_style(focused: bool) -> Style {
+        Style::default().fg(if focused {
+            Color::Yellow
+        } else {
+            Color::DarkGray
+        })
+    }
+
+    fn render_seperator(buf: &mut Buffer, area: Rect, depth: usize, content_w: usize, row: u16) {
+        let indent = "  ".repeat(depth);
+        let rule_w = content_w.saturating_sub(indent.len());
+        Paragraph::new(Line::from(vec![
+            Span::raw(indent),
+            Span::styled("─".repeat(rule_w), Self::seperator_style()),
+        ]))
+        .render(
+            Rect {
+                x: area.x,
+                y: row,
+                width: content_w as u16,
+                height: 1,
+            },
+            buf,
+        );
+    }
+
+    fn calculate_prefix_text(item: &Flat, height: usize, focused: bool) -> Text<'static> {
+        let indent = "  ".repeat(item.depth);
+        let prefix_sym = if item.node.children.is_empty() {
+            "  "
+        } else if item.node.opened {
+            "▼ "
+        } else {
+            "▶ "
+        };
+        let prefix_str = format!("{}{}", indent, prefix_sym);
+
+        let indent_w = indent.len() + 2;
+
+        let blank = Span::raw(" ".repeat(indent_w));
+        let mut prefix_lines = vec![Line::from(Span::styled(
+            prefix_str,
+            Self::prefix_style(focused),
+        ))];
+
+        //prefix lien should be upto to the same height as node height, so we insert blank
+        prefix_lines.extend((1..height).map(|_| Line::from(blank.clone())));
+        Text::from(prefix_lines)
+    }
 
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {
-        if area.width < 2 || area.height == 0 { return; }
-
-        let content_w = (area.width - 1) as usize; // rightmost col = scrollbar
-        let content_h = area.height as usize;
-
-        let flat = self.flat();
-
-        let sep_style  = Style::default().fg(Color::DarkGray);
-        let sel_style  = Style::default().bg(Color::DarkGray);
-        let pfx_style  = if focused { Style::default().fg(Color::Yellow) }
-                         else        { Style::default().fg(Color::DarkGray) };
-
-        struct VisLine { line: Line<'static>, selected: bool }
-        let mut vis: Vec<VisLine> = Vec::new();
-        let mut sel_row: Option<usize> = None;
-
-        for item in &flat {
-            let indent_w = item.depth * 2;
-            let indent   = "  ".repeat(item.depth);
-
-            // ── separator: between siblings, and between parent and first child
-            if !item.first_sibling || item.depth > 0 {
-                let rule_w = content_w.saturating_sub(indent_w);
-                let sep = Line::from(vec![
-                    Span::raw(indent.clone()),
-                    Span::styled("─".repeat(rule_w), sep_style),
-                ]);
-                vis.push(VisLine { line: sep, selected: false });
-            }
-
-            // ── item lines ────────────────────────────────────────────────
-            let is_sel  = item.path == self.selected;
-            let has_ch  = !item.node.children.is_empty();
-            let is_open = self.opened.contains(&item.path);
-
-            let sym      = if has_ch { if is_open { "▼ " } else { "▶ " } } else { "  " };
-            let prefix   = format!("{}{}", indent, sym);
-            let prefix_w = prefix.chars().count();
-            let inner_w  = content_w.saturating_sub(prefix_w).max(1);
-
-            let wrapped = wrap_line(item.node.line.clone(), inner_w);
-
-            let first = vis.len();
-            if is_sel { sel_row = Some(first); }
-
-            for (i, wline) in wrapped.into_iter().enumerate() {
-                let mut spans: Vec<Span<'static>> = Vec::new();
-                if i == 0 {
-                    spans.push(Span::styled(prefix.clone(), pfx_style));
-                } else {
-                    spans.push(Span::raw(" ".repeat(prefix_w)));
-                }
-                spans.extend(wline.spans);
-                vis.push(VisLine { line: Line::from(spans), selected: is_sel });
-            }
+        if area.width < 2 || area.height == 0 {
+            return;
         }
 
-        let total = vis.len();
+        let content_w = (area.width - 1) as usize;
+        let content_h = area.height as usize;
 
-        // Auto-scroll to keep selection visible
+        let (item_layout, total_rows, sel_row) = ItemLayout::layout_from_tree(self, content_w);
+
+        // Auto-scroll: keep selected node visible.
         if let Some(row) = sel_row {
             if row < self.vscroll {
                 self.vscroll = row;
@@ -246,20 +326,134 @@ impl TreeWidget {
                 self.vscroll = row + 1 - content_h;
             }
         }
-        self.vscroll = self.vscroll.min(total.saturating_sub(content_h));
+        self.vscroll = self.vscroll.min(total_rows.saturating_sub(content_h));
+        let mut viewport = Viewport::new(self.vscroll, area.y, area.y + content_h as u16);
 
-        let lines: Vec<Line<'static>> = vis.into_iter()
-            .skip(self.vscroll)
-            .take(content_h)
-            .map(|vl| if vl.selected { vl.line.style(sel_style) } else { vl.line })
-            .collect();
+        let flat = flatten(&self.nodes);
+        for (item, lay) in flat.iter().zip(item_layout) {
+            if viewport.is_full() {
+                break
+            }
+            let item_height = lay.sep as usize + lay.node_h;
+            if matches!(viewport.clip(item_height), Visibility::Hidden) {
+                continue
+            }
 
-        Paragraph::new(lines).render(
-            Rect { x: area.x, y: area.y, width: content_w as u16, height: content_h as u16 },
+            // Separator
+            if lay.sep && matches!(viewport.clip(1), Visibility::Visible{offset: _}) {
+                Self::render_seperator(buf, area, item.depth, content_w, viewport.curr_row());
+                viewport.advance(1);
+                viewport.advance_offset(1);
+                if viewport.is_full() {
+                    break;
+                }
+            }
+            // Node
+            let Visibility::Visible { offset } = viewport.clip(lay.node_h) else {
+                unreachable!("Hidden should never occur here");
+            };
+            let visible = viewport.visible_rows(lay.node_h, offset);
+            viewport.advance_offset(offset);
+
+            let (pfx_rect, para_rect) = lay.rect(area, viewport.curr_row(), visible as u16);
+
+            let is_selected = item.path == self.selected;
+            let style = if is_selected {
+                Self::selected_style()
+            } else {
+                Style::default()
+            };
+
+            let prefix_text = Self::calculate_prefix_text(item, lay.node_h, focused);
+            Paragraph::new(prefix_text)
+                .scroll((offset as u16, 0))
+                .style(style)
+                .render(pfx_rect, buf);
+            Paragraph::new(item.node.text.clone())
+                .wrap(Wrap { trim: false })
+                .scroll((offset as u16, 0))
+                .style(style)
+                .render(para_rect, buf);
+
+            viewport.advance(visible as u16);
+        }
+
+        draw_vscrollbar(
             buf,
+            area.x + content_w as u16,
+            area.y,
+            content_h as u16,
+            total_rows.max(content_h),
+            self.vscroll,
         );
+    }
+}
 
-        draw_vscrollbar(buf, area.x + content_w as u16, area.y,
-                        content_h as u16, total.max(content_h), self.vscroll);
+pub struct Viewport {
+    /// Number of rows scrolled above the viewport.
+    offset: usize,
+    /// Y-coordinate of the next row to render.
+    row: u16,
+    /// Maximum Y-coordinate of the viewport (exclusive).
+    bottom_row: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Visibility {
+    /// The span is entirely above the viewport (not visible)
+    Hidden,
+    /// The span is at least partially visible.
+    /// `offset` is the number of rows of the span that are hidden above the viewport.
+    Visible { offset: usize },
+}
+
+impl Viewport {
+    /// `offset` is the initial scroll (number of rows hidden above).
+    /// `row` is the starting row to render (`area.y`).
+    /// `bottom_row` is the bottom row of the viewport (`area.y + content_h`).
+    pub fn new(offset: usize, row: u16, bottom_row: u16) -> Self {
+        Self {
+            offset,
+            row,
+            bottom_row,
+        }
+    }
+
+    /// Does not reset the offset; you can explicitly call `reveal()` after consuming.
+    pub fn clip(&mut self, span_h: usize) -> Visibility {
+        if self.offset >= span_h {
+            // The entire span is above the viewport; consume the offset
+            self.offset -= span_h;
+            Visibility::Hidden
+        } else {
+            // Part or all of the span is visible
+            Visibility::Visible { offset: self.offset }
+        }
+    }
+
+    /// Advance the offset (scroll) by `n` rows.
+    /// Called after rendering part of the span.
+    pub fn advance_offset(&mut self, n: usize) {
+        self.offset = self.offset.saturating_sub(n);
+    }
+
+    pub fn curr_row(&self) -> u16 {
+        self.row
+    }
+
+    /// Advance the cursor row after rendering `rows` rows.
+    pub fn advance(&mut self, rows: u16) {
+        self.row += rows;
+    }
+
+    /// Returns how many rows of `span_h` are actually visible in the viewport.
+    /// `offset` is the number of rows hidden above the viewport within this span.
+    pub fn visible_rows(&self, span_h: usize, offset: usize) -> usize {
+        let available_rows = self.bottom_row.saturating_sub(self.row) as usize;
+        (span_h - offset).min(available_rows)
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.row >= self.bottom_row
     }
 }

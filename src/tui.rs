@@ -151,7 +151,7 @@ fn desc_to_nodes(node: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Vec<N
     spans.extend(render_slice(pattern, span.start, span.end, cgen).spans);
     spans.push(Span::raw(format!("` {}", node.desc)));
 
-    vec![Node { line: Line::from(spans), children }]
+    vec![Node::new(Line::from(spans), children)]
 }
 
 // ── Color helpers ─────────────────────────────────────────────────────────────
