@@ -119,39 +119,6 @@ impl ItemLayout {
     }
 }
 
-// scrollbar should be a seperate widget common for desctree and other scrollable widgets;
-fn draw_vscrollbar(buf: &mut Buffer, x: u16, y: u16, height: u16, total: usize, offset: usize) {
-    if height == 0 {
-        return;
-    }
-    let track = Style::default().fg(Color::DarkGray);
-    let thumb = Style::default().fg(Color::Gray);
-    if total <= height as usize {
-        for row in 0..height {
-            if let Some(c) = buf.cell_mut((x, y + row)) {
-                c.set_char('│');
-                c.set_style(track);
-            }
-        }
-        return;
-    }
-    let th = ((height as f64 * height as f64) / total as f64).ceil() as u16;
-    let th = th.max(1).min(height);
-    let range = total - height as usize;
-    let tt = ((offset as f64 / range as f64) * (height - th) as f64).round() as u16;
-    for row in 0..height {
-        let (ch, st) = if row >= tt && row < tt + th {
-            ('█', thumb)
-        } else {
-            ('│', track)
-        };
-        if let Some(c) = buf.cell_mut((x, y + row)) {
-            c.set_char(ch);
-            c.set_style(st);
-        }
-    }
-}
-
 pub struct TreeWidget {
     nodes: Vec<Node>,
     selected: Vec<usize>,
@@ -176,6 +143,19 @@ impl TreeWidget {
     /// Return the selected path (indices from root) inside the tree.
     pub fn selected_path(&self) -> &[usize] {
         &self.selected
+    }
+
+    /// Returns Selected, Total
+    pub fn selected_index_total(&self) -> (Option<usize>, usize) {
+        let flat = flatten(&self.nodes);
+        let total = flat.len();
+        if total == 0 { return (None, 0); }
+        if self.selected.is_empty() { return (None, total); }
+        let pos = flat.iter().position(|f| f.path == self.selected);
+        match pos {
+            Some(p) => (Some(p + 1), total),
+            None => (None, total),
+        }
     }
 
     fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
@@ -318,7 +298,7 @@ impl TreeWidget {
             return;
         }
 
-        let content_w = (area.width - 1) as usize;
+        let content_w = area.width as usize;
         let content_h = area.height as usize;
 
         let (item_layout, total_rows, sel_row) = ItemLayout::layout_from_tree(self, content_w);
@@ -382,15 +362,6 @@ impl TreeWidget {
 
             viewport.advance(visible as u16);
         }
-
-        draw_vscrollbar(
-            buf,
-            area.x + content_w as u16,
-            area.y,
-            content_h as u16,
-            total_rows.max(content_h),
-            self.vscroll,
-        );
     }
 }
 

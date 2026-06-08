@@ -521,7 +521,13 @@ fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::DescTree;
-    let block = focused_block("Description", focused);
+    let (sel, total) = app.tree.selected_index_total();
+    let title = match sel {
+        Some(i) => format!("Description: {}/{}", i, total),
+        None => "Description".to_string(),
+    };
+    let style = if focused { Style::default().fg(Color::Yellow) } else { Style::default() };
+    let block = Block::bordered().title(title).border_style(style);
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
     app.tree.render(inner, f.buffer_mut(), focused);
