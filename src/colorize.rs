@@ -33,6 +33,7 @@ impl ColorSpan {
     fn bg(span: Span, c: [f32; 4]) -> Self { Self { span, fg: None,    bg: Some(c) } }
 }
 
+#[derive(Clone)]
 pub struct ColorGenerator {
     spans: Vec<ColorSpan>,
 }
@@ -189,37 +190,4 @@ fn class_kind_bg(kind: &ClassKind) -> Option<[f32; 4]> {
         => Some([CLASS_BG[0], CLASS_BG[1], CLASS_BG[2], CLASS_ALPHA]),
         _ => None,
     }
-}
-
-
-pub fn render_colored(start: usize, pattern: &str, generator: &ColorGenerator, no_bg: bool) -> String {
-
-    fn to256(c: [f32; 3]) -> u8 {
-        const L: [u8; 6] = [0, 95, 135, 175, 215, 255];
-        let n = |v: u8| L.iter().enumerate()
-            .min_by_key(|&(_, &l)| (l as i16 - v as i16).unsigned_abs())
-            .map(|(i, _)| i as u8).unwrap();
-        16 + 36 * n((c[0]*255.0) as u8) + 6 * n((c[1]*255.0) as u8) + n((c[2]*255.0) as u8)
-    }
-
-    let mut result = String::new();
-    let mut prev: (Option<u8>, Option<u8>) = (None, None);
-
-    for (ix, ch) in pattern.char_indices() {
-        let i = ix + start;
-
-        let color = generator.char_color(i);
-        let color = (color.0.map(to256), color.1.map(to256));
-
-        if color != prev {
-            let (fg, bg) = color;
-            result.push_str("\x1b[0m");
-            if let Some(fg) = fg { result.push_str(&format!("\x1b[38;5;{}m", fg)); }
-            if let Some(bg) = bg && !no_bg { result.push_str(&format!("\x1b[48;5;{}m", bg)); }
-            prev = color;
-        }
-        result.push(ch);
-    }
-    if prev != (None, None) { result.push_str("\x1b[0m"); }
-    result
 }

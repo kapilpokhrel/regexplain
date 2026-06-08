@@ -1,7 +1,7 @@
 use crate::types::*;
 use std::collections::HashSet;
-use crate::colorize;
 
+#[derive(Clone)]
 pub struct DescNode {
     pub desc: String,
     pub nested_items: Vec<DescNode>,
@@ -275,18 +275,5 @@ impl Describer<RepeatNode> for DescGenerator {
         inner.span = target.span;
         inner.desc.push_str(&format!(", {}", count_eval));
         inner
-    }
-}
-
-impl DescNode {
-    pub fn print(&self, pattern: String, indent: usize, color_generator: &colorize::ColorGenerator) {
-        let get_match_str = |span: Span| colorize::render_colored(span.start, &pattern[span.start..span.end], color_generator, true);
-        if !self.desc.is_empty() {
-            println!("{}`{}` {}", "  ".repeat(indent), get_match_str(self.span), self.desc);
-        }
-        let child_indent = if self.desc.is_empty() { indent } else { indent + 1 };
-        for child in &self.nested_items {
-            child.print(pattern.clone(), child_indent, color_generator);
-        }
     }
 }

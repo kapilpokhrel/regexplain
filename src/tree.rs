@@ -173,6 +173,11 @@ impl TreeWidget {
         self.vscroll = 0;
     }
 
+    /// Return the selected path (indices from root) inside the tree.
+    pub fn selected_path(&self) -> &[usize] {
+        &self.selected
+    }
+
     fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
         if path.is_empty() {
             return None;
