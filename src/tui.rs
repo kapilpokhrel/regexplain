@@ -2,11 +2,7 @@ use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Paragraph, Widget, Wrap},
+    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Paragraph, Widget, Wrap}
 };
 use regex::bytes::Regex;
 
@@ -14,13 +10,7 @@ use crate::colorize::{ColorGenerator, Colorizer};
 use crate::convert;
 use crate::desc::{DescGenerator, DescNode, Describer};
 use crate::tree::{Node, TreeWidget};
-use tui_textarea::TextArea;
-
-type CursorRange = ((usize, usize), (usize, usize));
-struct TextMatch {
-    range: CursorRange,
-    groups: Vec<(CursorRange, Option<String>)> // vector index + 1 will be group index
-}
+use crate::textarea::TextMatchWidget;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -46,13 +36,11 @@ struct App {
     inp_cursor_pos: usize,
 
     tree: TreeWidget,
-    textarea: TextArea<'static>,
+    textmatch_widget: TextMatchWidget,
 
-    re: Option<Regex>,
     pattern_line: Line<'static>,
     error: Option<String>,
 
-    matches: Vec<TextMatch>,
     // Keep last parsed pattern & colors so tree selection can update the input line styling.
     last_cgen: Option<ColorGenerator>,
     last_desc: Option<crate::desc::DescNode>,
@@ -65,11 +53,9 @@ impl App {
             input: String::new(),
             inp_cursor_pos: 0,
             tree: TreeWidget::new(),
-            textarea: TextArea::default(),
-            re: None,
+            textmatch_widget: TextMatchWidget::new(),
             pattern_line: Line::default(),
             error: None,
-            matches: Vec::new(),
             last_cgen: None,
             last_desc: None,
         }
@@ -98,7 +84,8 @@ impl App {
                 self.last_cgen = Some(cgen);
                 self.last_desc = Some(root);
 
-                self.re = Regex::new(&self.input).ok(); // we have already checked for the error
+                let re = Regex::new(&self.input).ok(); // we have already checked for the error
+                self.textmatch_widget.update_regex(re);
                 self.update_pattern_line();
             }
             Err(e) => {
@@ -107,60 +94,6 @@ impl App {
                 self.tree.set_nodes(vec![]);
                 self.last_cgen = None;
             }
-        }
-    }
-
-    fn eval_regex(&mut self) {
-        if let Some(re) = &self.re {
-            let lines = self.textarea.lines();
-            let text: String = lines.join("\n");
-
-            let get_cursor_pos = |x: usize| {
-                let mut x = x;
-                let mut row = 0usize;
-                let mut col = 0;
-                for line in lines {
-                    if x <= line.len() {
-                        col = x;
-                        break;
-                    } else {
-                        row += 1;
-                        x -= line.len() + 1; // +1 for the newline
-                    }
-                }
-                (row, col)
-            };
-
-            let get_cursor_range = |m: &regex::bytes::Match| {
-                (
-                    get_cursor_pos(m.start()),
-                    get_cursor_pos(m.end())
-                ) as CursorRange
-            };
-
-            let grp_names: Vec<Option<&str>> = re.capture_names().collect();
-
-            let mut matches: Vec<TextMatch> = Vec::new();
-            for caps in re.captures_iter(text.as_bytes()) {
-                let full_match = caps.get(0).unwrap();
-                let mut groups = Vec::new();
-
-                for (i, grp) in caps.iter().enumerate() {
-                    let name = grp_names.get(i).and_then(|n| n.and_then(|n| Some(n.to_string())));
-                    if let Some(grp_match) = grp {
-                        groups.push((
-                            get_cursor_range(&grp_match),
-                            name
-                        ))
-                    }
-                }
-
-                matches.push(TextMatch{
-                    range: get_cursor_range(&full_match),
-                    groups
-                })
-            }
-            self.matches = matches;
         }
     }
 
@@ -405,80 +338,6 @@ fn render_pattern_input(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
-fn render_status_line(f: &mut Frame, app: &mut App, area: Rect) {
-    let (row, col) = app.textarea.cursor();
-
-    // inline function to get check if the cursor (usize, usize) is inside a cusrorRange
-    let is_inside_range = |r: &CursorRange| -> bool {
-        (row >= r.0.0 && row <= r.1.0) && (col >= r.0.1 && col <= r.1.1)
-    };
-
-    let mut match_text = String::new();
-    for (i,m) in app.matches.iter().enumerate() {
-        if is_inside_range(&m.range) {
-            match_text = format!("Match {}", i);
-            let mut grp_iter = m.groups.iter().enumerate();
-            grp_iter.next();
-            for (i, g) in grp_iter {
-                if is_inside_range(&g.0) {
-                    let grp_str = if let Some(ref n) = g.1 {
-                        format!(", group {}", n)
-                    } else {
-                        format!(", group {}", i)
-                    };
-                    match_text.push_str(grp_str.as_str());
-                    break;
-                }
-            }
-            break;
-        }
-    }
-
-    let cursor = format!("({}:{})", row + 1, col + 1);
-
-    let total_lines = app.textarea.lines().len();
-    let percentage = if row == 0 {
-        "Top "
-    } else if row + 1 == total_lines {
-        "Bot "
-    } else {
-        &format!("{}% ", ((row + 1) * 100)/app.textarea.lines().len())
-    };
-    let status_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                Constraint::Min(1),
-                Constraint::Length(percentage.len() as u16),
-                Constraint::Length(cursor.len() as u16),
-            ]
-            .as_ref(),
-        )
-        .split(area);
-    let status_style = Style::default().add_modifier(Modifier::REVERSED);
-    f.render_widget(Paragraph::new(match_text).style(status_style), status_chunks[0]);
-    f.render_widget(Paragraph::new(percentage).style(status_style), status_chunks[1]);
-    f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
-}
-
-fn render_textarea(f: &mut Frame, app: &mut App, area: Rect) {
-    for m in app.matches.iter() {
-        app.textarea.custom_highlight(
-            m.range,
-            Style::default().bg(Color::LightBlue),
-            0
-        );
-        for (i, g) in m.groups.iter().enumerate() {
-            app.textarea.custom_highlight(
-                g.0,
-                Style::default().bg(Color::Green),
-                (i + 1) as u8
-            );
-        }
-    }
-    f.render_widget(&app.textarea, area);
-}
-
 fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::TextToMatch;
     let block = focused_block("Text to match", focused);
@@ -492,8 +351,8 @@ fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
     let editor_area = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
     let editor = editor_area[0];
     let status = editor_area[1];
-    render_textarea(f, app, editor);
-    render_status_line(f, app, status);
+    app.textmatch_widget.render_textarea(f, editor);
+    app.textmatch_widget.render_status_line(f, status);
 }
 
 fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -568,10 +427,10 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
             },
 
             Focus::TextToMatch => {
-                if !app.textarea.input(key) {
+                if !app.textmatch_widget.input(key) {
                     continue;
                 }
-                app.eval_regex();
+                app.textmatch_widget.eval_regex();
             }
 
             Focus::DescTree => match (key.modifiers, key.code) {

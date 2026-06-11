@@ -4,6 +4,7 @@ mod desc;
 mod colorize;
 mod tree;
 mod tui;
+mod textarea;
 
 
 fn main() {
