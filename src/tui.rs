@@ -2,7 +2,7 @@ use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Modifier, Style}, text::{Line, Span}, widgets::{Block, Paragraph, Widget, Wrap}
+    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Style}, text::{Line, Span}, widgets::{Block, Widget}
 };
 use regex::bytes::Regex;
 
@@ -11,6 +11,7 @@ use crate::convert;
 use crate::desc::{DescGenerator, DescNode, Describer};
 use crate::tree::{Node, TreeWidget};
 use crate::textarea::TextMatchWidget;
+use crate::inputarea::InputLineWidget;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -32,8 +33,7 @@ impl Focus {
 struct App {
     focus: Focus,
 
-    input: String,
-    inp_cursor_pos: usize,
+    inputarea: InputLineWidget,
 
     tree: TreeWidget,
     textmatch_widget: TextMatchWidget,
@@ -50,8 +50,7 @@ impl App {
     fn new() -> Self {
         Self {
             focus: Focus::PatternInput,
-            input: String::new(),
-            inp_cursor_pos: 0,
+            inputarea: InputLineWidget::new(),
             tree: TreeWidget::new(),
             textmatch_widget: TextMatchWidget::new(),
             pattern_line: Line::default(),
@@ -62,14 +61,15 @@ impl App {
     }
 
     fn reparse(&mut self) {
-        if self.input.is_empty() {
+        let input = self.inputarea.pattern_str();
+        if input.is_empty() {
             self.pattern_line = Line::default();
             self.error = None;
             self.tree.set_nodes(vec![]);
             self.last_cgen = None;
             return;
         }
-        match convert::parse_and_convert(&self.input) {
+        match convert::parse_and_convert(&input) {
             Ok(form) => {
                 self.error = None;
                 let mut cgen = ColorGenerator::new();
@@ -84,7 +84,7 @@ impl App {
                 self.last_cgen = Some(cgen);
                 self.last_desc = Some(root);
 
-                let re = Regex::new(&self.input).ok(); // we have already checked for the error
+                let re = Regex::new(&input).ok(); // we have already checked for the error
                 self.textmatch_widget.update_regex(re);
                 self.update_pattern_line();
             }
@@ -93,6 +93,8 @@ impl App {
                 self.pattern_line = Line::default();
                 self.tree.set_nodes(vec![]);
                 self.last_cgen = None;
+                self.last_desc = None;
+                self.inputarea.clear_highlight();
             }
         }
     }
@@ -112,86 +114,15 @@ impl App {
             None
         }
     }
+
     fn update_pattern_line(&mut self) {
-        if let (Some(c), Some(span)) = (
-            &self.last_cgen,
-            self.get_selected_span(),
-        ) {
-            self.pattern_line = self.render_pattern_line(&self.input, c, Some(span));
-        }
-    }
-
-    /// Render the whole pattern line but make the selected node's span bold (if desctree is focused)
-    fn render_pattern_line(
-        &self,
-        pattern: &str,
-        cgen: &ColorGenerator,
-        selected_span: Option<crate::types::Span>,
-    ) -> Line<'static> {
-        let len = pattern.len();
-        if len == 0 {
-            return Line::default();
-        }
-        if let Some(span) = selected_span
-            && self.focus == Focus::DescTree
-        {
-            let s = span.start;
-            let e = span.end;
-            // Validate bounds
-            if s >= e || e > len {
-                return render_slice(pattern, 0, len, cgen, 1.0);
-            }
-
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            // before (dim slightly)
-            spans.extend(render_slice(pattern, 0, s, cgen, 0.75).spans);
-            // selected (make bold + brighter)
-            let sel_line = render_slice(pattern, s, e, cgen, 1.5);
-            for sp in sel_line.spans.into_iter() {
-                let new_style = sp.style.add_modifier(Modifier::BOLD);
-                spans.push(Span::styled(sp.content.clone(), new_style));
-            }
-            // after (dim slightly)
-            spans.extend(render_slice(pattern, e, len, cgen, 0.75).spans);
-            Line::from(spans)
-        } else {
-            render_slice(pattern, 0, len, cgen, 1.0)
-        }
-    }
-
-    fn input_insert(&mut self, c: char) {
-        self.input.insert(self.inp_cursor_pos, c);
-        self.inp_cursor_pos += c.len_utf8();
-        self.reparse();
-    }
-    fn input_backspace(&mut self) {
-        if self.inp_cursor_pos > 0 {
-            let prev = self.input[..self.inp_cursor_pos]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            self.input.remove(prev);
-            self.inp_cursor_pos = prev;
-            self.reparse();
-        }
-    }
-    fn input_left(&mut self) {
-        if self.inp_cursor_pos > 0 {
-            self.inp_cursor_pos = self.input[..self.inp_cursor_pos]
-                .char_indices()
-                .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-        }
-    }
-    fn input_right(&mut self) {
-        if self.inp_cursor_pos < self.input.len() {
-            self.inp_cursor_pos += self.input[self.inp_cursor_pos..]
-                .chars()
-                .next()
-                .unwrap()
-                .len_utf8();
+        if let Some(c) = &self.last_cgen {
+            let s = if let Some(span) = self.get_selected_span() && self.focus == Focus::DescTree {
+                Some(span)
+            } else {
+                None
+            };
+            self.inputarea.render_input_line(c, s);
         }
     }
 }
@@ -210,25 +141,10 @@ fn desc_to_nodes(node: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Vec<N
 
     let span = node.span;
     let mut spans = vec![Span::raw("`")];
-    spans.extend(render_slice(pattern, span.start, span.end, cgen, 1.0).spans);
+    spans.extend(render_slice(pattern, span.start, span.end, cgen).spans);
     spans.push(Span::raw(format!("` {}", node.desc)));
 
     vec![Node::new(Line::from(spans), children)]
-}
-
-fn to_color(rgb: [f32; 3]) -> Color {
-    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
-    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
-}
-
-fn brighten_fg(fg: Option<[f32; 3]>, factor: f32) -> Option<[f32; 3]> {
-    fg.map(|c| {
-        [
-            (c[0] * factor).min(1.0),
-            (c[1] * factor).min(1.0),
-            (c[2] * factor).min(1.0),
-        ]
-    })
 }
 
 fn render_slice(
@@ -236,7 +152,6 @@ fn render_slice(
     start: usize,
     end: usize,
     cgen: &ColorGenerator,
-    fg_bright_factor: f32,
 ) -> Line<'static> {
     if start >= end {
         return Line::default();
@@ -244,20 +159,23 @@ fn render_slice(
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut seg = start;
     let (mut cfg, mut cbg) = cgen.char_color(start);
-    cfg = brighten_fg(cfg, fg_bright_factor);
     for (rel, _) in pattern[start..end].char_indices().skip(1) {
         let abs = start + rel;
         let (fg, bg) = cgen.char_color(abs);
-        let fg_b = brighten_fg(fg, fg_bright_factor);
-        if fg_b != cfg || bg != cbg {
+        if fg != cfg || bg != cbg {
             push_span(pattern, seg, abs, cfg, cbg, &mut spans);
             seg = abs;
-            cfg = fg_b;
+            cfg = fg;
             cbg = bg;
         }
     }
     push_span(pattern, seg, end, cfg, cbg, &mut spans);
     Line::from(spans)
+}
+
+fn to_color(rgb: [f32; 3]) -> Color {
+    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
 }
 
 fn push_span(
@@ -314,28 +232,14 @@ fn focused_block<'a>(title: &'a str, focused: bool) -> Block<'a> {
 
 fn render_pattern_input(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::PatternInput;
-    let content: Line = if app.error.is_some() {
-        Line::styled(app.input.clone(), Style::default().fg(Color::Red))
-    } else if app.pattern_line.spans.is_empty() {
-        Line::raw(app.input.clone())
-    } else {
-        app.pattern_line.clone()
-    };
-    Paragraph::new(content)
-        .block(focused_block("Pattern  (Esc quit · Shift+Tab cycle)", focused))
-        .wrap(Wrap { trim: false })
-        .render(area, f.buffer_mut());
+    let block = focused_block("Pattern  (Esc quit · Shift+Tab cycle)", focused);
+    let inner = block.inner(area);
+    block.render(area, f.buffer_mut());
 
-    if focused {
-        let iw = area.width.saturating_sub(2);
-        let ci = app.input[..app.inp_cursor_pos].chars().count() as u16;
-        let (cr, cc) = if let Some(q) = ci.checked_div(iw) {
-            (q, ci % iw)
-        } else {
-            (0, ci)
-        };
-        f.set_cursor_position((area.x + 1 + cc, area.y + 1 + cr));
+    if inner.height < 1 {
+        return;
     }
+    app.inputarea.render_inputline(f, inner);
 }
 
 fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
@@ -374,7 +278,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     let iw = sides[0].width.saturating_sub(2);
-    let ih = (wrapped_lines(&app.input, iw) + 2).max(3);
+    let ih = (wrapped_lines(&app.inputarea.pattern_str(), iw) + 2).max(3);
     let left = Layout::vertical([Constraint::Length(ih), Constraint::Min(0)]).split(sides[0]);
 
     render_pattern_input(f, app, left[0]);
@@ -416,14 +320,11 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
         }
 
         match app.focus {
-            Focus::PatternInput => match (key.modifiers, key.code) {
-                (KeyModifiers::NONE | KeyModifiers::SHIFT, KeyCode::Char(c)) => app.input_insert(c),
-                (_, KeyCode::Backspace) => app.input_backspace(),
-                (_, KeyCode::Left) => app.input_left(),
-                (_, KeyCode::Right) => app.input_right(),
-                (_, KeyCode::Home) => app.inp_cursor_pos = 0,
-                (_, KeyCode::End) => app.inp_cursor_pos = app.input.len(),
-                _ => {}
+            Focus::PatternInput => {
+                if !app.inputarea.input(key) {
+                    continue;
+                }
+                app.reparse();
             },
 
             Focus::TextToMatch => {
