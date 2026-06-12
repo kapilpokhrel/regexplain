@@ -100,14 +100,26 @@ impl App {
     }
 
     fn get_selected_span(&self) -> Option<crate::types::Span> {
+        // Treat nodes with an empty desc as transparent (hoisted children), mirroring desc_to_nodes.
+        fn visible_children<'a>(node: &'a crate::desc::DescNode, out: &mut Vec<&'a crate::desc::DescNode>) {
+            for child in &node.nested_items {
+                if child.desc.is_empty() {
+                    visible_children(child, out);
+                } else {
+                    out.push(child);
+                }
+            }
+        }
+
         if let Some(d) = &self.last_desc {
             let mut cur = d;
             for &idx in self.tree.selected_path() {
-                if let Some(n) = cur.nested_items.get(idx) {
-                    cur = n;
-                } else {
+                let mut vis = Vec::new();
+                visible_children(cur, &mut vis);
+                if idx >= vis.len() {
                     break;
                 }
+                cur = vis[idx];
             }
             Some(cur.span)
         } else {
