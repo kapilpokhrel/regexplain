@@ -47,35 +47,47 @@ impl ColorGenerator {
         self.spans.push(span);
     }
 
+    pub fn sort_spans(&mut self) {
+        // sort spans by widest first
+        self.spans.sort_by_key(|s| std::cmp::Reverse(s.span.end - s.span.start));
+    }
+
+    /// assume already sorted by widest span first
     pub fn char_color(&self, i: usize) -> (Option<[f32; 3]>, Option<[f32; 3]>) {
         fn over(dst: [f32; 3], src: [f32; 4]) -> [f32; 3] {
             let a = src[3];
             [src[0]*a + dst[0]*(1.0-a), src[1]*a + dst[1]*(1.0-a), src[2]*a + dst[2]*(1.0-a)]
         }
 
-        // Sort bg layers widest-first (outermost = bottom) then composite
-        let mut layers: Vec<(usize, [f32; 4])> = self.spans.iter()
-            .filter(|s| s.span.start <= i && i < s.span.end && s.bg.is_some())
-            .map(|s| (s.span.end - s.span.start, s.bg.unwrap()))
-            .collect();
-
-        layers.sort_by_key(|&(width, _)| width);
-        let bg = if layers.is_empty() { None } else {
-            Some(layers.iter().fold(TERMINAL_BG, |acc, &(_, rgba)| over(acc, rgba)))
-        };
-
-        // Narrowest fg span wins
-        let fg = self.spans.iter()
-            .filter(|s| s.span.start <= i && i < s.span.end && s.fg.is_some())
-            .min_by_key(|s| s.span.end - s.span.start)
-            .and_then(|s| s.fg);
-
+        let mut bg_color = TERMINAL_BG;
+        let mut has_bg = false;
+        for s in &self.spans {
+            if s.span.start <= i && i < s.span.end && let Some(rbga) = s.bg {
+                bg_color = over(bg_color, rbga);
+                has_bg = true;
+            }
+        }
+        let bg = if has_bg { Some(bg_color) } else { None };
+        let mut fg = None;
+        for s in self.spans.iter().rev() { //narrowest first
+            if s.span.start <= i && i < s.span.end && s.fg.is_some() {
+                fg = s.fg;
+                break; // first match is the narrowest
+            }
+        }
         (fg, bg)
     }
 }
 
 pub trait Colorizer<T> {
     fn colorize(&mut self, target: T);
+}
+
+impl Colorizer<&RegExplainForm> for ColorGenerator {
+    fn colorize(&mut self, form: &RegExplainForm) {
+        self.colorize(&form.root);
+        self.sort_spans();
+    }
 }
 
 impl Colorizer<&RegExplainSimplifiedNode> for ColorGenerator {

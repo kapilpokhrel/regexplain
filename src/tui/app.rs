@@ -66,7 +66,7 @@ impl App {
             Ok(form) => {
                 self.error = None;
                 let mut cgen = ColorGenerator::new();
-                cgen.colorize(&form.root);
+                cgen.colorize(&form);
 
                 self.desctree_widget = DescTreeWidget::from_regex_description_tree(
                     &DescGenerator::new().describe(form.root),
@@ -199,9 +199,6 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if !event::poll(std::time::Duration::from_millis(50))? {
-            continue;
-        }
         let Event::Key(key) = event::read()? else {
             continue;
         };
