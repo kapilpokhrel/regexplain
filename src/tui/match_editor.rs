@@ -6,15 +6,15 @@ use ratatui::{
 use crate::tui::textarea_ext::TextAreaExt;
 
 
-struct TextMatch {
+struct RegexMatchGrp {
     start_offset: usize,
     end_offset: usize,
     label: String, // computed label (name or 'group N')
-    groups: Vec<TextMatch>,
+    groups: Vec<RegexMatchGrp>,
 }
 
-impl TextMatch {
-    fn contains(&self, other: &TextMatch) -> bool {
+impl RegexMatchGrp {
+    fn contains(&self, other: &RegexMatchGrp) -> bool {
         self.start_offset <= other.start_offset && other.end_offset <= self.end_offset
     }
 
@@ -22,7 +22,7 @@ impl TextMatch {
         offset >= self.start_offset && offset < self.end_offset
     }
 
-    fn insert(&mut self, child: TextMatch) {
+    fn insert(&mut self, child: RegexMatchGrp) {
         for sub in &mut self.groups {
             if sub.contains(&child) {
                 sub.insert(child);
@@ -36,10 +36,10 @@ impl TextMatch {
 pub struct MatchEditorWidget {
     re: Option<regex::bytes::Regex>,
     textarea: TextArea<'static>,
-    matches: Vec<TextMatch>,
+    matches: Vec<RegexMatchGrp>,
 }
 
-fn find_group_path(m: &TextMatch, offset: usize) -> Vec<&TextMatch>
+fn find_group_path(m: &RegexMatchGrp, offset: usize) -> Vec<&RegexMatchGrp>
 {
     if !m.contains_offset(offset) {
         return Vec::new();
@@ -91,10 +91,10 @@ impl MatchEditorWidget {
 
             let grp_names: Vec<Option<&str>> = re.capture_names().collect();
 
-            let mut matches: Vec<TextMatch> = Vec::new();
+            let mut matches: Vec<RegexMatchGrp> = Vec::new();
             for caps in re.captures_iter(text.as_bytes()) {
                 let full_match = caps.get(0).unwrap();
-                let mut root_match = TextMatch {
+                let mut root_match = RegexMatchGrp {
                     start_offset: full_match.start(),
                     end_offset: full_match.end(),
                     label: String::new(),
@@ -107,7 +107,7 @@ impl MatchEditorWidget {
                     }
                     let name = grp_names.get(i).and_then(|n| n.and_then(|n| Some(n.to_string())));
                     if let Some(grp_match) = grp {
-                        let child = TextMatch {
+                        let child = RegexMatchGrp {
                             start_offset: grp_match.start(),
                             end_offset: grp_match.end(),
                             label: if let Some(ref n) = name { n.clone() } else { format!("group {}", i) },
@@ -130,7 +130,7 @@ impl MatchEditorWidget {
 
     }
 
-    fn highlight_match(textarea: &mut TextArea, m: &TextMatch, n: u8) {
+    fn highlight_match(textarea: &mut TextArea, m: &RegexMatchGrp, n: u8) {
         let range = textarea.get_cursor_range_from_offsets(m.start_offset, m.end_offset);
         let colors = [
             Color::Rgb(0, 100, 0),    // Dark Green

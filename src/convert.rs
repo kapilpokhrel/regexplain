@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::iter::Peekable;
 
 use regex_syntax::ast::parse::Parser;
@@ -5,7 +6,7 @@ use regex_syntax::ast::{self, Ast};
 
 use crate::types::*;
 
-pub fn parse_and_convert(pattern: &str) -> Result<RegExplainForm, Box<ast::Error>> {
+pub fn parse_and_convert(pattern: &str) -> Result<RegExplainForm, Box<dyn Error>> {
     let ast = Parser::new().parse(pattern)?;
     Ok(RegExplainForm {
         pattern: pattern.to_string(),

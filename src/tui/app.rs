@@ -34,13 +34,12 @@ struct App {
     focus: Focus,
 
     inputarea: InputLineWidget,
-    desctree: DescTreeWidget,
+    desctree_widget: DescTreeWidget,
     match_editor: MatchEditorWidget,
 
     error: Option<String>,
-    // Keep last parsed pattern & colors so tree selection can update the input line styling.
-    last_cgen: Option<ColorGenerator>,
-    last_desc: Option<crate::desc::DescNode>,
+
+    color_generator: Option<ColorGenerator>
 }
 
 impl App {
@@ -48,11 +47,11 @@ impl App {
         Self {
             focus: Focus::PatternInput,
             inputarea: InputLineWidget::new(),
-            desctree: DescTreeWidget::new(),
+            desctree_widget: DescTreeWidget::new(),
             match_editor: MatchEditorWidget::new(),
             error: None,
-            last_cgen: None,
-            last_desc: None,
+
+            color_generator: None,
         }
     }
 
@@ -60,8 +59,7 @@ impl App {
         let input = self.inputarea.pattern_str();
         if input.is_empty() {
             self.error = None;
-            self.desctree.set_nodes(vec![]);
-            self.last_cgen = None;
+            self.color_generator = None;
             return;
         }
         match convert::parse_and_convert(&input) {
@@ -70,32 +68,29 @@ impl App {
                 let mut cgen = ColorGenerator::new();
                 cgen.colorize(&form.root);
 
-                let root = DescGenerator::new().describe(form.root);
+                self.desctree_widget = DescTreeWidget::from_regex_description_tree(
+                    &DescGenerator::new().describe(form.root),
+                    &form.pattern,
+                    &cgen
+                );
 
-                self.desctree = DescTreeWidget::from_descnodes(&root, &form.pattern, &cgen);
-
-                // Store last pattern + color generator + desc root for tree lookups.
-                self.last_cgen = Some(cgen);
-                self.last_desc = Some(root);
-
+                self.color_generator = Some(cgen);
                 let re = Regex::new(&input).ok(); // we have already checked for the error
                 self.match_editor.update_regex(re);
                 self.update_input_pattern();
             }
             Err(e) => {
                 self.error = Some(e.to_string());
-                self.desctree.set_nodes(vec![]);
-                self.last_cgen = None;
-                self.last_desc = None;
+                self.color_generator = None;
                 self.inputarea.clear_highlight();
             }
         }
     }
 
     fn update_input_pattern(&mut self) {
-        if let (Some(c), Some(d)) = (&self.last_cgen, &self.last_desc) {
+        if let Some(c) = &self.color_generator {
             let span = if self.focus == Focus::DescTree {
-                Some(self.desctree.get_selected_span(d))
+                self.desctree_widget.get_selected_span()
             } else {
                 None
             };
@@ -160,7 +155,7 @@ fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
 
 fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::DescTree;
-    let (sel, total) = app.desctree.selected_index_total();
+    let (sel, total) = app.desctree_widget.selected_index_total();
     let title = match sel {
         Some(i) => format!("Description: {}/{}", i, total),
         None => "Description".to_string(),
@@ -170,12 +165,12 @@ fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
 
-    app.desctree.set_accent_color(if focused {
+    app.desctree_widget.set_accent_color(if focused {
         Color::Yellow
     } else {
         Color::DarkGray
     });
-    f.render_widget(&mut app.desctree, inner);
+    f.render_widget(&mut app.desctree_widget, inner);
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -241,22 +236,22 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
             }
 
             Focus::DescTree => match (key.modifiers, key.code) {
-                (KeyModifiers::CONTROL, KeyCode::Char('n')) => app.desctree.scroll_down(),
-                (KeyModifiers::CONTROL, KeyCode::Char('j')) => app.desctree.scroll_up(),
+                (KeyModifiers::CONTROL, KeyCode::Char('n')) => app.desctree_widget.scroll_down(),
+                (KeyModifiers::CONTROL, KeyCode::Char('j')) => app.desctree_widget.scroll_up(),
                 (_, KeyCode::Char('j') | KeyCode::Down) => {
-                    app.desctree.select_down();
+                    app.desctree_widget.select_down();
                     app.update_input_pattern();
                 }
                 (_, KeyCode::Char('k') | KeyCode::Up) => {
-                    app.desctree.select_up();
+                    app.desctree_widget.select_up();
                     app.update_input_pattern();
                 }
                 (_, KeyCode::Char('h') | KeyCode::Left) => {
-                    app.desctree.select_left();
+                    app.desctree_widget.select_left();
                     app.update_input_pattern();
                 }
                 (_, KeyCode::Char('l') | KeyCode::Right) => {
-                    app.desctree.select_right();
+                    app.desctree_widget.select_right();
                     app.update_input_pattern();
                 }
                 _ => {}

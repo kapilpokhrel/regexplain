@@ -2,40 +2,41 @@ use crate::types::*;
 use std::collections::HashSet;
 
 #[derive(Clone)]
-pub struct DescNode {
+pub struct RegexDescriptionNode {
     pub desc: String,
-    pub nested_items: Vec<DescNode>,
+    pub nested_items: Vec<RegexDescriptionNode>,
     pub span: Span,
 }
 
-pub struct SymbolTable {
+pub struct DescContext {
     effective_flags: HashSet<char>
-} // I don't know what else to call it lol
+    // we might need to add something else in future
+}
 
 pub struct DescGenerator {
-    sym_table: SymbolTable,
+    context: DescContext,
 }
 
 impl DescGenerator {
     pub fn new() -> Self {
         Self {
-            sym_table: SymbolTable{
+            context: DescContext{
                 effective_flags: HashSet::new(),
             }
         }
     }
 
-    pub fn leaf(&self, span: Span, desc: impl Into<String>) -> DescNode {
-        DescNode { span, desc: desc.into(), nested_items: vec![] }
+    pub fn leaf(&self, span: Span, desc: impl Into<String>) -> RegexDescriptionNode {
+        RegexDescriptionNode { span, desc: desc.into(), nested_items: vec![] }
     }
 }
 
 pub trait Describer<T> {
-    fn describe(&mut self, target: T) -> DescNode;
+    fn describe(&mut self, target: T) -> RegexDescriptionNode;
 }
 
 impl Describer<RegExplainSimplifiedNode> for DescGenerator {
-    fn describe(&mut self, target: RegExplainSimplifiedNode) -> DescNode {
+    fn describe(&mut self, target: RegExplainSimplifiedNode) -> RegexDescriptionNode {
         match target {
             RegExplainSimplifiedNode::Flags(f)     => self.describe(f),
             RegExplainSimplifiedNode::Literal(l)   => self.describe(l),
@@ -43,12 +44,12 @@ impl Describer<RegExplainSimplifiedNode> for DescGenerator {
             RegExplainSimplifiedNode::Class(c)     => self.describe(c),
             RegExplainSimplifiedNode::Group(g)     => self.describe(g),
             RegExplainSimplifiedNode::Repeat(r)    => self.describe(r),
-            RegExplainSimplifiedNode::Alt { alts, span } => DescNode {
+            RegExplainSimplifiedNode::Alt { alts, span } => RegexDescriptionNode {
                 span,
                 desc: "Selects one of the matches from the following list".into(),
                 nested_items: alts.into_iter().map(|x| self.describe(x)).collect(),
             },
-            RegExplainSimplifiedNode::Concat { span, nodes } => DescNode {
+            RegExplainSimplifiedNode::Concat { span, nodes } => RegexDescriptionNode {
                 span,
                 desc: String::new(),
                 nested_items: nodes.into_iter().map(|x| self.describe(x)).collect(),
@@ -58,8 +59,8 @@ impl Describer<RegExplainSimplifiedNode> for DescGenerator {
 }
 
 impl Describer<LiteralNode> for DescGenerator {
-    fn describe(&mut self, target: LiteralNode) -> DescNode {
-        let case = if self.sym_table.effective_flags.contains(&'i') {"[case insensative]"} else {"[case sensative]"};
+    fn describe(&mut self, target: LiteralNode) -> RegexDescriptionNode {
+        let case = if self.context.effective_flags.contains(&'i') {"[case insensative]"} else {"[case sensative]"};
         self.leaf(target.span, match target.ch {
             LiteralChar::Verbatim(s) => format!("matches \"{}\" literally {}", s, case),
             LiteralChar::Octal(s)   => format!("matches character {}, (octal escaped)", s),
@@ -78,7 +79,7 @@ impl Describer<LiteralNode> for DescGenerator {
 }
 
 impl Describer<AssertionNode> for DescGenerator {
-    fn describe(&mut self, target: AssertionNode) -> DescNode {
+    fn describe(&mut self, target: AssertionNode) -> RegexDescriptionNode {
         self.leaf(target.span, match target.kind {
             AssertionKind::StartLine           => "asserts position at start of line",
             AssertionKind::EndLine             => "asserts position at the end of line",
@@ -107,12 +108,12 @@ fn get_flag_info(kind: FlagKind) -> (char, &'static str) {
 }
 
 impl Describer<FlagItem> for DescGenerator {
-    fn describe(&mut self, target: FlagItem) -> DescNode {
+    fn describe(&mut self, target: FlagItem) -> RegexDescriptionNode {
         let (flag_sym, flag_desc) = get_flag_info(target.kind);
         if target.negated {
-            self.sym_table.effective_flags.remove(&flag_sym);
+            self.context.effective_flags.remove(&flag_sym);
         } else {
-            self.sym_table.effective_flags.insert(flag_sym);
+            self.context.effective_flags.insert(flag_sym);
         }
         self.leaf(target.span, format!(
             "{} {}",
@@ -123,10 +124,10 @@ impl Describer<FlagItem> for DescGenerator {
 }
 
 impl Describer<FlagNode> for DescGenerator {
-    fn describe(&mut self, target: FlagNode) -> DescNode {
-        let nested_items: Vec<DescNode> = target.items.into_iter().map(|x| self.describe(x)).collect();
-        let effective_flags_str: String = self.sym_table.effective_flags.iter().collect();
-        DescNode {
+    fn describe(&mut self, target: FlagNode) -> RegexDescriptionNode {
+        let nested_items: Vec<RegexDescriptionNode> = target.items.into_iter().map(|x| self.describe(x)).collect();
+        let effective_flags_str: String = self.context.effective_flags.iter().collect();
+        RegexDescriptionNode {
             span: target.span,
             desc: format!("enable/disable the following flags; effective flags for the remainder of this group: [{}]", effective_flags_str),
             nested_items,
@@ -135,9 +136,9 @@ impl Describer<FlagNode> for DescGenerator {
 }
 
 impl Describer<GroupNode> for DescGenerator {
-    fn describe(&mut self, target: GroupNode) -> DescNode {
+    fn describe(&mut self, target: GroupNode) -> RegexDescriptionNode {
         // clones the old effective_flags
-        let old_flags = self.sym_table.effective_flags.clone();
+        let old_flags = self.context.effective_flags.clone();
         let (header, mut nested) = match target.kind {
             GroupKind::Capture { index, name: None } => {
                 (format!("capture group #{}", index), vec![])
@@ -146,8 +147,8 @@ impl Describer<GroupNode> for DescGenerator {
                 (format!("capture group #{} named \"{}\"", index, name), vec![])
             }
             GroupKind::NonCapturing(flags) => {
-                let flags_node: Vec<DescNode> = flags.into_iter().map(|x| self.describe(x)).collect();
-                let effective_flags_str: String = self.sym_table.effective_flags.iter().collect();
+                let flags_node: Vec<RegexDescriptionNode> = flags.into_iter().map(|x| self.describe(x)).collect();
+                let effective_flags_str: String = self.context.effective_flags.iter().collect();
                 let effective_flags_suffix = if !flags_node.is_empty() {
                     format!(" with effective flags: [{}]", effective_flags_str)
                 } else {
@@ -161,13 +162,13 @@ impl Describer<GroupNode> for DescGenerator {
         };
         nested.push(self.describe(*target.inner));
         // replace with old effective_flags
-        self.sym_table.effective_flags = old_flags;
-        DescNode { span: target.span, desc: header, nested_items: nested }
+        self.context.effective_flags = old_flags;
+        RegexDescriptionNode { span: target.span, desc: header, nested_items: nested }
     }
 }
 
 impl Describer<ClassNode> for DescGenerator {
-    fn describe(&mut self, target: ClassNode) -> DescNode {
+    fn describe(&mut self, target: ClassNode) -> RegexDescriptionNode {
         let negated = target.negated;
         let neg = if negated { "not a" } else { "a" };
         match target.kind {
@@ -203,7 +204,7 @@ impl Describer<ClassNode> for DescGenerator {
             }),
             ClassKind::Bracketed(items) => {
                 let neg = if negated { "not in" } else { "in" };
-                DescNode {
+                RegexDescriptionNode {
                     span: target.span,
                     desc: format!("matches any one character that is {} the list below", neg),
                     nested_items: items.into_iter().map(|x| self.describe(x)).collect(),
@@ -217,15 +218,15 @@ impl Describer<ClassNode> for DescGenerator {
                     ClassBinaryOp::SymmetricDifference => "first list or in second list but not in both lists",
                 };
 
-                DescNode {
+                RegexDescriptionNode {
                     span: target.span,
                     desc: format!("matches any character that is {} {}", neg, op_str),
                     nested_items: vec![
-                        DescNode {
+                        RegexDescriptionNode {
                             span: lhs.span,
                             desc: "1st list".into(), nested_items: vec![self.describe(lhs)]
                         },
-                        DescNode {
+                        RegexDescriptionNode {
                             span: rhs.span,
                             desc: "2nd list".into(), nested_items: vec![self.describe(rhs)]
                         },
@@ -238,9 +239,9 @@ impl Describer<ClassNode> for DescGenerator {
 }
 
 impl Describer<ClassOperand> for DescGenerator {
-    fn describe(&mut self, target: ClassOperand) -> DescNode {
+    fn describe(&mut self, target: ClassOperand) -> RegexDescriptionNode {
         match *target.kind {
-            ClassKind::Bracketed(items) => DescNode {
+            ClassKind::Bracketed(items) => RegexDescriptionNode {
                 span: target.span,
                 desc: String::new(),
                 nested_items: items.into_iter().map(|x| self.describe(x)).collect(),
@@ -251,7 +252,7 @@ impl Describer<ClassOperand> for DescGenerator {
 }
 
 impl Describer<ClassItem> for DescGenerator {
-    fn describe(&mut self, target: ClassItem) -> DescNode {
+    fn describe(&mut self, target: ClassItem) -> RegexDescriptionNode {
         match target {
             ClassItem::Literal(l)             => self.describe(l),
             ClassItem::Range { span, start, end } => self.leaf(span, format!("matches anything from '{}' to '{}'", start, end)),
@@ -261,7 +262,7 @@ impl Describer<ClassItem> for DescGenerator {
 }
 
 impl Describer<RepeatNode> for DescGenerator {
-    fn describe(&mut self, target: RepeatNode) -> DescNode {
+    fn describe(&mut self, target: RepeatNode) -> RegexDescriptionNode {
         let greedy = if target.greedy { " (greedy)" } else { " (lazy)" };
         let count_eval = match (target.min, target.max) {
             (0, Some(1)) => "optionally".to_string() + greedy,

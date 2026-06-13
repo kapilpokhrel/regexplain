@@ -6,36 +6,29 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
-use crate::{colorize::ColorGenerator, desc::DescNode};
+use crate::types;
 
-pub struct TreeNode {
+use crate::{colorize::ColorGenerator, desc::RegexDescriptionNode};
+
+pub struct DescTreeNode {
     pub text: Text<'static>,
-    pub children: Vec<TreeNode>,
+    pub children: Vec<DescTreeNode>,
     pub opened: bool,
+    span: types::Span,
 }
 
-impl TreeNode {
-    pub fn new(text: impl Into<Text<'static>>, children: Vec<TreeNode>) -> Self {
-        Self {
-            text: text.into(),
-            children,
-            opened: false,
-        }
-    }
-}
-
-struct Flat<'a> {
-    node: &'a TreeNode,
+struct FlattenedDescTreeNode<'a> {
+    node: &'a DescTreeNode,
     path: Vec<usize>,
     depth: usize,
     root: bool,
 }
 
-fn flatten_into<'a>(nodes: &'a [TreeNode], path: &[usize], depth: usize, out: &mut Vec<Flat<'a>>) {
+fn flatten_into<'a>(nodes: &'a[DescTreeNode], path: &[usize], depth: usize, out: &mut Vec<FlattenedDescTreeNode<'a>>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut p = path.to_vec();
         p.push(i);
-        out.push(Flat {
+        out.push(FlattenedDescTreeNode {
             node,
             path: p.clone(),
             depth,
@@ -47,7 +40,7 @@ fn flatten_into<'a>(nodes: &'a [TreeNode], path: &[usize], depth: usize, out: &m
     }
 }
 
-fn flatten(nodes: &[TreeNode]) -> Vec<Flat<'_>> {
+fn flatten(nodes: &[DescTreeNode]) -> Vec<FlattenedDescTreeNode<'_>> {
     let mut out = Vec::new();
     flatten_into(nodes, &[], 0, &mut out);
     out
@@ -69,20 +62,20 @@ fn compute_text_height(text: &Text<'static>, width: usize) -> usize {
     total
 }
 
-struct ItemLayout {
+struct DescTreeItemLayout {
     sep: bool,
     node_h: usize,
     indent_width: usize,
     para_width: usize,
 }
 
-impl ItemLayout {
+impl DescTreeItemLayout {
     fn layout_from_tree(tree: &DescTreeWidget, content_w: usize) -> (Vec<Self>, usize, Option<usize>) {
         let flat = flatten(&tree.nodes);
 
         let mut total_rows = 0usize;
         let mut sel_row = None;
-        let item_layout: Vec<ItemLayout> = flat
+        let item_layout: Vec<DescTreeItemLayout> = flat
             .iter()
             .map(|item| {
                 let sep = !item.root || item.depth > 0;
@@ -93,7 +86,7 @@ impl ItemLayout {
                     sel_row = Some(total_rows + sep as usize);
                 }
                 total_rows += sep as usize + node_h;
-                ItemLayout {
+                DescTreeItemLayout {
                     sep,
                     node_h,
                     indent_width,
@@ -122,7 +115,7 @@ impl ItemLayout {
 }
 
 pub struct DescTreeWidget {
-    nodes: Vec<TreeNode>,
+    nodes: Vec<DescTreeNode>,
     selected: Vec<usize>,
     vscroll: usize,
     accent_color: Color,
@@ -142,8 +135,8 @@ impl DescTreeWidget {
         self.accent_color = c;
     }
 
-    fn descnode_to_treenode(node: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Vec<TreeNode> {
-        let children: Vec<TreeNode> = node
+    fn descnode_to_treenode(node: &RegexDescriptionNode, pattern: &str, cgen: &ColorGenerator) -> Vec<DescTreeNode> {
+        let children: Vec<DescTreeNode> = node
             .nested_items
             .iter()
             .flat_map(|child| Self::descnode_to_treenode(child, pattern, cgen))
@@ -155,15 +148,20 @@ impl DescTreeWidget {
         }
 
         let span = node.span;
-        let mut spans = vec![Span::raw("`")];
-        spans.extend(render_slice(pattern, span.start, span.end, cgen));
-        spans.push(Span::raw(format!("` {}", node.desc)));
+        let mut text_spans = vec![Span::raw("`")];
+        text_spans.extend(get_colored_slice(pattern, span.start, span.end, cgen));
+        text_spans.push(Span::raw(format!("` {}", node.desc)));
 
-        vec![TreeNode::new(Line::from(spans), children)]
+        vec![DescTreeNode{
+            text: Line::from(text_spans).into(),
+            opened: false,
+            children,
+            span
+        }]
 
     }
 
-    pub fn from_descnodes(desc_root: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Self {
+    pub fn from_regex_description_tree(desc_root: &RegexDescriptionNode, pattern: &str, cgen: &ColorGenerator) -> Self {
         let root_tree_node = Self::descnode_to_treenode(desc_root, pattern, cgen);
         Self {
            nodes: root_tree_node,
@@ -171,37 +169,21 @@ impl DescTreeWidget {
         }
     }
 
-    pub fn get_selected_span(&self, desc_root: &DescNode) -> crate::types::Span {
-        // Treat nodes with an empty desc as transparent (hoisted children), mirroring desc_to_nodes.
-        fn visible_children<'a>(node: &'a crate::desc::DescNode, out: &mut Vec<&'a crate::desc::DescNode>) {
-            for child in &node.nested_items {
-                if child.desc.is_empty() {
-                    visible_children(child, out);
-                } else {
-                    out.push(child);
-                }
+    pub fn get_selected_span(&self) -> Option<crate::types::Span> {
+        let path = self.selected_path();
+        if path.is_empty() {
+            None
+        } else {
+            let mut cur = &self.nodes[path[0]];
+            for &idx in path[1..].iter() {
+                cur = &cur.children[idx];
             }
+            Some(cur.span)
         }
-
-        let mut cur = desc_root;
-        for &idx in self.selected_path() {
-            let mut vis = Vec::new();
-            visible_children(cur, &mut vis);
-            if idx >= vis.len() {
-                break;
-            }
-            cur = vis[idx];
-        }
-        cur.span
-    }
-
-    pub fn set_nodes(&mut self, nodes: Vec<TreeNode>) {
-        self.nodes = nodes;
-        self.selected.clear();
-        self.vscroll = 0;
     }
 
     /// Return the selected path (indices from root) inside the tree.
+    #[inline]
     pub fn selected_path(&self) -> &[usize] {
         &self.selected
     }
@@ -219,7 +201,7 @@ impl DescTreeWidget {
         }
     }
 
-    fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut TreeNode> {
+    fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut DescTreeNode> {
         if path.is_empty() {
             return None;
         }
@@ -322,7 +304,7 @@ impl DescTreeWidget {
         );
     }
 
-    fn calculate_prefix_text(item: &Flat, height: usize, accent_color: Color) -> Text<'static> {
+    fn calculate_prefix_text(item: &FlattenedDescTreeNode, height: usize, accent_color: Color) -> Text<'static> {
         let indent = "  ".repeat(item.depth);
         let prefix_sym = if item.node.children.is_empty() {
             "  "
@@ -356,7 +338,7 @@ impl Widget for &mut DescTreeWidget {
         let content_w = area.width as usize;
         let content_h = area.height as usize;
 
-        let (item_layout, total_rows, sel_row) = ItemLayout::layout_from_tree(self, content_w);
+        let (item_layout, total_rows, sel_row) = DescTreeItemLayout::layout_from_tree(self, content_w);
 
         // Auto-scroll: keep selected node visible.
         if let Some(row) = sel_row {
@@ -367,7 +349,7 @@ impl Widget for &mut DescTreeWidget {
             }
         }
         self.vscroll = self.vscroll.min(total_rows.saturating_sub(content_h));
-        let mut viewport = Viewport::new(self.vscroll, area.y, area.y + content_h as u16);
+        let mut viewport = RenderViewport::new(self.vscroll, area.y, area.y + content_h as u16);
 
         let flat = flatten(&self.nodes);
         for (item, lay) in flat.iter().zip(item_layout) {
@@ -420,7 +402,7 @@ impl Widget for &mut DescTreeWidget {
     }
 }
 
-pub struct Viewport {
+pub struct RenderViewport {
     /// Number of rows scrolled above the viewport.
     offset: usize,
     /// Y-coordinate of the next row to render.
@@ -438,7 +420,7 @@ pub enum Visibility {
     Visible { offset: usize },
 }
 
-impl Viewport {
+impl RenderViewport {
     /// `offset` is the initial scroll (number of rows hidden above).
     /// `row` is the starting row to render (`area.y`).
     /// `bottom_row` is the bottom row of the viewport (`area.y + content_h`).
@@ -489,7 +471,7 @@ impl Viewport {
     }
 }
 
-fn render_slice(
+fn get_colored_slice(
     pattern: &str,
     start: usize,
     end: usize,
