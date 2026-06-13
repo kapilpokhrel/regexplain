@@ -6,14 +6,16 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
-pub struct Node {
+use crate::{colorize::ColorGenerator, desc::DescNode};
+
+pub struct TreeNode {
     pub text: Text<'static>,
-    pub children: Vec<Node>,
+    pub children: Vec<TreeNode>,
     pub opened: bool,
 }
 
-impl Node {
-    pub fn new(text: impl Into<Text<'static>>, children: Vec<Node>) -> Self {
+impl TreeNode {
+    pub fn new(text: impl Into<Text<'static>>, children: Vec<TreeNode>) -> Self {
         Self {
             text: text.into(),
             children,
@@ -23,13 +25,13 @@ impl Node {
 }
 
 struct Flat<'a> {
-    node: &'a Node,
+    node: &'a TreeNode,
     path: Vec<usize>,
     depth: usize,
     root: bool,
 }
 
-fn flatten_into<'a>(nodes: &'a [Node], path: &[usize], depth: usize, out: &mut Vec<Flat<'a>>) {
+fn flatten_into<'a>(nodes: &'a [TreeNode], path: &[usize], depth: usize, out: &mut Vec<Flat<'a>>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut p = path.to_vec();
         p.push(i);
@@ -45,7 +47,7 @@ fn flatten_into<'a>(nodes: &'a [Node], path: &[usize], depth: usize, out: &mut V
     }
 }
 
-fn flatten(nodes: &[Node]) -> Vec<Flat<'_>> {
+fn flatten(nodes: &[TreeNode]) -> Vec<Flat<'_>> {
     let mut out = Vec::new();
     flatten_into(nodes, &[], 0, &mut out);
     out
@@ -75,7 +77,7 @@ struct ItemLayout {
 }
 
 impl ItemLayout {
-    fn layout_from_tree(tree: &TreeWidget, content_w: usize) -> (Vec<Self>, usize, Option<usize>) {
+    fn layout_from_tree(tree: &DescTreeWidget, content_w: usize) -> (Vec<Self>, usize, Option<usize>) {
         let flat = flatten(&tree.nodes);
 
         let mut total_rows = 0usize;
@@ -102,7 +104,7 @@ impl ItemLayout {
         (item_layout, total_rows, sel_row)
     }
 
-    fn rect(&self, area: Rect, row: u16, visible: u16 ) -> (Rect, Rect) {
+    fn rects(&self, area: Rect, row: u16, visible: u16 ) -> (Rect, Rect) {
         let pfx_rect = Rect {
             x: area.x,
             y: row,
@@ -119,22 +121,81 @@ impl ItemLayout {
     }
 }
 
-pub struct TreeWidget {
-    nodes: Vec<Node>,
+pub struct DescTreeWidget {
+    nodes: Vec<TreeNode>,
     selected: Vec<usize>,
     vscroll: usize,
+    accent_color: Color,
 }
 
-impl TreeWidget {
+impl DescTreeWidget {
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
             selected: Vec::new(),
             vscroll: 0,
+            accent_color: Color::Yellow
         }
     }
 
-    pub fn set_nodes(&mut self, nodes: Vec<Node>) {
+    pub fn set_accent_color(&mut self, c: Color) {
+        self.accent_color = c;
+    }
+
+    fn descnode_to_treenode(node: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Vec<TreeNode> {
+        let children: Vec<TreeNode> = node
+            .nested_items
+            .iter()
+            .flat_map(|child| Self::descnode_to_treenode(child, pattern, cgen))
+            .collect();
+
+        if node.desc.is_empty() {
+            // Transparent concat node — hoist children up
+            return children;
+        }
+
+        let span = node.span;
+        let mut spans = vec![Span::raw("`")];
+        spans.extend(render_slice(pattern, span.start, span.end, cgen));
+        spans.push(Span::raw(format!("` {}", node.desc)));
+
+        vec![TreeNode::new(Line::from(spans), children)]
+
+    }
+
+    pub fn from_descnodes(desc_root: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Self {
+        let root_tree_node = Self::descnode_to_treenode(desc_root, pattern, cgen);
+        Self {
+           nodes: root_tree_node,
+           ..Self::new()
+        }
+    }
+
+    pub fn get_selected_span(&self, desc_root: &DescNode) -> crate::types::Span {
+        // Treat nodes with an empty desc as transparent (hoisted children), mirroring desc_to_nodes.
+        fn visible_children<'a>(node: &'a crate::desc::DescNode, out: &mut Vec<&'a crate::desc::DescNode>) {
+            for child in &node.nested_items {
+                if child.desc.is_empty() {
+                    visible_children(child, out);
+                } else {
+                    out.push(child);
+                }
+            }
+        }
+
+        let mut cur = desc_root;
+        for &idx in self.selected_path() {
+            let mut vis = Vec::new();
+            visible_children(cur, &mut vis);
+            if idx >= vis.len() {
+                break;
+            }
+            cur = vis[idx];
+        }
+        cur.span
+    }
+
+    pub fn set_nodes(&mut self, nodes: Vec<TreeNode>) {
         self.nodes = nodes;
         self.selected.clear();
         self.vscroll = 0;
@@ -158,7 +219,7 @@ impl TreeWidget {
         }
     }
 
-    fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
+    fn get_node_mut(&mut self, path: &[usize]) -> Option<&mut TreeNode> {
         if path.is_empty() {
             return None;
         }
@@ -243,14 +304,6 @@ impl TreeWidget {
         Style::default().bg(Color::DarkGray)
     }
 
-    fn prefix_style(focused: bool) -> Style {
-        Style::default().fg(if focused {
-            Color::Yellow
-        } else {
-            Color::DarkGray
-        })
-    }
-
     fn render_seperator(buf: &mut Buffer, area: Rect, depth: usize, content_w: usize, row: u16) {
         let indent = "  ".repeat(depth);
         let rule_w = content_w.saturating_sub(indent.len());
@@ -269,7 +322,7 @@ impl TreeWidget {
         );
     }
 
-    fn calculate_prefix_text(item: &Flat, height: usize, focused: bool) -> Text<'static> {
+    fn calculate_prefix_text(item: &Flat, height: usize, accent_color: Color) -> Text<'static> {
         let indent = "  ".repeat(item.depth);
         let prefix_sym = if item.node.children.is_empty() {
             "  "
@@ -285,15 +338,17 @@ impl TreeWidget {
         let blank = Span::raw(" ".repeat(indent_w));
         let mut prefix_lines = vec![Line::from(Span::styled(
             prefix_str,
-            Self::prefix_style(focused),
+            Style::default().fg(accent_color),
         ))];
 
         //prefix lien should be upto to the same height as node height, so we insert blank
         prefix_lines.extend((1..height).map(|_| Line::from(blank.clone())));
         Text::from(prefix_lines)
     }
+}
 
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, focused: bool) {
+impl Widget for &mut DescTreeWidget {
+    fn render(self, area: Rect, buf: &mut Buffer) {
         if area.width < 2 || area.height == 0 {
             return;
         }
@@ -326,7 +381,7 @@ impl TreeWidget {
 
             // Separator
             if lay.sep && matches!(viewport.clip(1), Visibility::Visible{offset: _}) {
-                Self::render_seperator(buf, area, item.depth, content_w, viewport.curr_row());
+                DescTreeWidget::render_seperator(buf, area, item.depth, content_w, viewport.curr_row());
                 viewport.advance(1);
                 viewport.advance_offset(1);
                 if viewport.is_full() {
@@ -340,16 +395,16 @@ impl TreeWidget {
             let visible = viewport.visible_rows(lay.node_h, offset);
             viewport.advance_offset(offset);
 
-            let (pfx_rect, para_rect) = lay.rect(area, viewport.curr_row(), visible as u16);
+            let (pfx_rect, para_rect) = lay.rects(area, viewport.curr_row(), visible as u16);
 
             let is_selected = item.path == self.selected;
             let style = if is_selected {
-                Self::selected_style()
+                DescTreeWidget::selected_style()
             } else {
                 Style::default()
             };
 
-            let prefix_text = Self::calculate_prefix_text(item, lay.node_h, focused);
+            let prefix_text = DescTreeWidget::calculate_prefix_text(item, lay.node_h, self.accent_color);
             Paragraph::new(prefix_text)
                 .scroll((offset as u16, 0))
                 .style(style)
@@ -432,4 +487,33 @@ impl Viewport {
     pub fn is_full(&self) -> bool {
         self.row >= self.bottom_row
     }
+}
+
+fn render_slice(
+    pattern: &str,
+    start: usize,
+    end: usize,
+    cgen: &ColorGenerator,
+) -> Vec<Span<'static>> {
+    if start >= end {
+        return Vec::new();
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for idx in start..end {
+        let (fg, bg) = cgen.char_color(idx);
+        let mut style = Style::default();
+        if let Some(f) = fg {
+            style = style.fg(to_color(f));
+        }
+        if let Some(b) = bg {
+            style = style.bg(to_color(b));
+        }
+        spans.push(Span::styled(pattern[idx..idx+1].to_string(), style));
+    }
+    spans
+}
+
+fn to_color(rgb: [f32; 3]) -> Color {
+    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
+    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
 }

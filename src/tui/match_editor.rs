@@ -1,9 +1,9 @@
 use crossterm::event::KeyEvent;
 use tui_textarea::TextArea;
 use ratatui::{
-    Frame, layout::{Layout, Constraint, Direction, Rect}, style::{Color, Modifier, Style}, widgets::Paragraph
+    layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, widgets::{Paragraph, Widget}
 };
-use crate::textarea_ext::TextAreaExt;
+use crate::tui::textarea_ext::TextAreaExt;
 
 
 struct TextMatch {
@@ -33,7 +33,7 @@ impl TextMatch {
     }
 }
 
-pub struct TextMatchWidget {
+pub struct MatchEditorWidget {
     re: Option<regex::bytes::Regex>,
     textarea: TextArea<'static>,
     matches: Vec<TextMatch>,
@@ -55,7 +55,7 @@ fn find_group_path(m: &TextMatch, offset: usize) -> Vec<&TextMatch>
     path
 }
 
-impl TextMatchWidget {
+impl MatchEditorWidget {
     pub fn new() -> Self {
         Self {
             re: None,
@@ -119,8 +119,15 @@ impl TextMatchWidget {
 
                 matches.push(root_match);
             }
+
+            self.textarea.clear_custom_highlight();
+            for m in &matches {
+                Self::highlight_match(&mut self.textarea, m, 1);
+            }
+
             self.matches = matches;
         }
+
     }
 
     fn highlight_match(textarea: &mut TextArea, m: &TextMatch, n: u8) {
@@ -140,20 +147,16 @@ impl TextMatchWidget {
             n,
         );
         for (i, sub) in m.groups.iter().enumerate() {
-            TextMatchWidget::highlight_match(textarea, sub, n + 1 + i as u8);
+            MatchEditorWidget::highlight_match(textarea, sub, n + 1 + i as u8);
         }
     }
 
-    pub fn render_textarea(&mut self, f: &mut Frame, area: Rect) {
-        let matches = &self.matches;
-
-        for m in matches {
-            Self::highlight_match(&mut self.textarea, m, 1);
-        }
-        f.render_widget(&self.textarea, area);
+    fn render_textarea(&self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
+        self.textarea.render(area, buf);
     }
 
-    pub fn render_status_line(&self, f: &mut Frame, area: Rect) {
+    //pub fn render_status_line(&self, f: &mut Frame, area: Rect) {
+    fn render_status_line(&self, area: Rect, buf: &mut ratatui::prelude::Buffer) {
         let (row, col) = self.textarea.cursor();
         let offset = self.textarea.get_flat_offset_from_cursor();
 
@@ -191,8 +194,22 @@ impl TextMatchWidget {
             )
             .split(area);
         let status_style = Style::default().add_modifier(Modifier::REVERSED);
-        f.render_widget(Paragraph::new(match_text).style(status_style), status_chunks[0]);
-        f.render_widget(Paragraph::new(percentage).style(status_style), status_chunks[1]);
-        f.render_widget(Paragraph::new(cursor).style(status_style), status_chunks[2]);
+
+        Paragraph::new(match_text).style(status_style).render(status_chunks[0], buf);
+        Paragraph::new(percentage).style(status_style).render(status_chunks[1], buf);
+        Paragraph::new(cursor).style(status_style).render(status_chunks[2], buf);
+    }
+}
+
+impl Widget for &MatchEditorWidget {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
+    where
+        Self: Sized
+    {
+        let editor_area = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(area);
+        let editor = editor_area[0];
+        let status = editor_area[1];
+        self.render_textarea(editor, buf);
+        self.render_status_line(status, buf);
     }
 }

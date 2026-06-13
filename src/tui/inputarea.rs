@@ -1,9 +1,9 @@
 use crossterm::event::KeyEvent;
 use tui_textarea::{TextArea, WrapMode};
 use ratatui::{
-    Frame, layout::Rect, style::{Color, Modifier, Style}
+    layout::Rect, style::{Color, Modifier, Style}, widgets::Widget
 };
-use crate::textarea_ext::TextAreaExt;
+use crate::tui::textarea_ext::TextAreaExt;
 use crate::colorize::ColorGenerator;
 
 
@@ -89,10 +89,8 @@ impl InputLineWidget {
         if start >= end {
             return;
         }
-        for abs in start..end {
-        //for (rel, _) in pattern[start..end].char_indices().skip(1) {
-            //let abs = start + rel;
-            let (fg, bg) = cgen.char_color(abs);
+        for idx in start..end {
+            let (fg, bg) = cgen.char_color(idx);
             let fg_b = brighten_fg(fg, fg_bright_factor);
             let mut s = Style::default();
             if let Some(f) = fg_b {
@@ -104,7 +102,7 @@ impl InputLineWidget {
             if let Some(additional_s) = additional_style {
                 s = s.patch(additional_s);
             }
-            let cr = self.textarea.get_cursor_range_from_offsets(abs, abs + 1);
+            let cr = self.textarea.get_cursor_range_from_offsets(idx, idx + 1);
             self.textarea.custom_highlight(
                 cr,
                 s,
@@ -112,8 +110,13 @@ impl InputLineWidget {
             );
         }
     }
+}
 
-    pub fn render_inputline(&mut self, f: &mut Frame, area: Rect) {
-        f.render_widget(&self.textarea, area);
+impl Widget for &InputLineWidget {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
+    where
+        Self: Sized
+    {
+        self.textarea.render(area, buf)
     }
 }

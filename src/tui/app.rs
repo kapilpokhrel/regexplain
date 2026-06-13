@@ -2,16 +2,16 @@ use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Style}, text::{Line, Span}, widgets::{Block, Widget}
+    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Style}, widgets::{Widget, Block}
 };
 use regex::bytes::Regex;
 
 use crate::colorize::{ColorGenerator, Colorizer};
 use crate::convert;
-use crate::desc::{DescGenerator, DescNode, Describer};
-use crate::tree::{Node, TreeWidget};
-use crate::textarea::TextMatchWidget;
-use crate::inputarea::InputLineWidget;
+use crate::desc::{DescGenerator, Describer};
+use crate::tui::desctree::DescTreeWidget;
+use crate::tui::match_editor::MatchEditorWidget;
+use crate::tui::inputarea::InputLineWidget;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -34,13 +34,10 @@ struct App {
     focus: Focus,
 
     inputarea: InputLineWidget,
+    desctree: DescTreeWidget,
+    match_editor: MatchEditorWidget,
 
-    tree: TreeWidget,
-    textmatch_widget: TextMatchWidget,
-
-    pattern_line: Line<'static>,
     error: Option<String>,
-
     // Keep last parsed pattern & colors so tree selection can update the input line styling.
     last_cgen: Option<ColorGenerator>,
     last_desc: Option<crate::desc::DescNode>,
@@ -51,9 +48,8 @@ impl App {
         Self {
             focus: Focus::PatternInput,
             inputarea: InputLineWidget::new(),
-            tree: TreeWidget::new(),
-            textmatch_widget: TextMatchWidget::new(),
-            pattern_line: Line::default(),
+            desctree: DescTreeWidget::new(),
+            match_editor: MatchEditorWidget::new(),
             error: None,
             last_cgen: None,
             last_desc: None,
@@ -63,9 +59,8 @@ impl App {
     fn reparse(&mut self) {
         let input = self.inputarea.pattern_str();
         if input.is_empty() {
-            self.pattern_line = Line::default();
             self.error = None;
-            self.tree.set_nodes(vec![]);
+            self.desctree.set_nodes(vec![]);
             self.last_cgen = None;
             return;
         }
@@ -77,21 +72,19 @@ impl App {
 
                 let root = DescGenerator::new().describe(form.root);
 
-                let nodes = desc_to_nodes(&root, &form.pattern, &cgen);
-                self.tree.set_nodes(nodes);
+                self.desctree = DescTreeWidget::from_descnodes(&root, &form.pattern, &cgen);
 
                 // Store last pattern + color generator + desc root for tree lookups.
                 self.last_cgen = Some(cgen);
                 self.last_desc = Some(root);
 
                 let re = Regex::new(&input).ok(); // we have already checked for the error
-                self.textmatch_widget.update_regex(re);
-                self.update_pattern_line();
+                self.match_editor.update_regex(re);
+                self.update_input_pattern();
             }
             Err(e) => {
                 self.error = Some(e.to_string());
-                self.pattern_line = Line::default();
-                self.tree.set_nodes(vec![]);
+                self.desctree.set_nodes(vec![]);
                 self.last_cgen = None;
                 self.last_desc = None;
                 self.inputarea.clear_highlight();
@@ -99,117 +92,16 @@ impl App {
         }
     }
 
-    fn get_selected_span(&self) -> Option<crate::types::Span> {
-        // Treat nodes with an empty desc as transparent (hoisted children), mirroring desc_to_nodes.
-        fn visible_children<'a>(node: &'a crate::desc::DescNode, out: &mut Vec<&'a crate::desc::DescNode>) {
-            for child in &node.nested_items {
-                if child.desc.is_empty() {
-                    visible_children(child, out);
-                } else {
-                    out.push(child);
-                }
-            }
-        }
-
-        if let Some(d) = &self.last_desc {
-            let mut cur = d;
-            for &idx in self.tree.selected_path() {
-                let mut vis = Vec::new();
-                visible_children(cur, &mut vis);
-                if idx >= vis.len() {
-                    break;
-                }
-                cur = vis[idx];
-            }
-            Some(cur.span)
-        } else {
-            None
-        }
-    }
-
-    fn update_pattern_line(&mut self) {
-        if let Some(c) = &self.last_cgen {
-            let s = if let Some(span) = self.get_selected_span() && self.focus == Focus::DescTree {
-                Some(span)
+    fn update_input_pattern(&mut self) {
+        if let (Some(c), Some(d)) = (&self.last_cgen, &self.last_desc) {
+            let span = if self.focus == Focus::DescTree {
+                Some(self.desctree.get_selected_span(d))
             } else {
                 None
             };
-            self.inputarea.render_input_line(c, s);
+            self.inputarea.render_input_line(c, span);
         }
     }
-}
-
-fn desc_to_nodes(node: &DescNode, pattern: &str, cgen: &ColorGenerator) -> Vec<Node> {
-    let children: Vec<Node> = node
-        .nested_items
-        .iter()
-        .flat_map(|child| desc_to_nodes(child, pattern, cgen))
-        .collect();
-
-    if node.desc.is_empty() {
-        // Transparent concat node — hoist children up
-        return children;
-    }
-
-    let span = node.span;
-    let mut spans = vec![Span::raw("`")];
-    spans.extend(render_slice(pattern, span.start, span.end, cgen).spans);
-    spans.push(Span::raw(format!("` {}", node.desc)));
-
-    vec![Node::new(Line::from(spans), children)]
-}
-
-fn render_slice(
-    pattern: &str,
-    start: usize,
-    end: usize,
-    cgen: &ColorGenerator,
-) -> Line<'static> {
-    if start >= end {
-        return Line::default();
-    }
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut seg = start;
-    let (mut cfg, mut cbg) = cgen.char_color(start);
-    for (rel, _) in pattern[start..end].char_indices().skip(1) {
-        let abs = start + rel;
-        let (fg, bg) = cgen.char_color(abs);
-        if fg != cfg || bg != cbg {
-            push_span(pattern, seg, abs, cfg, cbg, &mut spans);
-            seg = abs;
-            cfg = fg;
-            cbg = bg;
-        }
-    }
-    push_span(pattern, seg, end, cfg, cbg, &mut spans);
-    Line::from(spans)
-}
-
-fn to_color(rgb: [f32; 3]) -> Color {
-    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
-    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
-}
-
-fn push_span(
-    pat: &str,
-    start: usize,
-    end: usize,
-    fg: Option<[f32; 3]>,
-    bg: Option<[f32; 3]>,
-    out: &mut Vec<Span<'static>>,
-) {
-    let text = pat[start..end].to_string();
-    if text.is_empty() {
-        return;
-    }
-    let mut style = Style::default();
-    if let Some(f) = fg {
-        style = style.fg(to_color(f));
-    }
-    if let Some(b) = bg {
-        style = style.bg(to_color(b));
-    }
-    out.push(Span::styled(text, style));
 }
 
 fn wrapped_lines(s: &str, width: u16) -> u16 {
@@ -251,7 +143,7 @@ fn render_pattern_input(f: &mut Frame, app: &mut App, area: Rect) {
     if inner.height < 1 {
         return;
     }
-    app.inputarea.render_inputline(f, inner);
+    f.render_widget(&app.inputarea, inner);
 }
 
 fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
@@ -263,17 +155,12 @@ fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
     if inner.width < 2 || inner.height < 2 {
         return;
     }
-
-    let editor_area = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-    let editor = editor_area[0];
-    let status = editor_area[1];
-    app.textmatch_widget.render_textarea(f, editor);
-    app.textmatch_widget.render_status_line(f, status);
+    f.render_widget(&app.match_editor, inner);
 }
 
 fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let focused = app.focus == Focus::DescTree;
-    let (sel, total) = app.tree.selected_index_total();
+    let (sel, total) = app.desctree.selected_index_total();
     let title = match sel {
         Some(i) => format!("Description: {}/{}", i, total),
         None => "Description".to_string(),
@@ -282,7 +169,13 @@ fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::bordered().title(title).border_style(style);
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
-    app.tree.render(inner, f.buffer_mut(), focused);
+
+    app.desctree.set_accent_color(if focused {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    });
+    f.render_widget(&mut app.desctree, inner);
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
@@ -325,7 +218,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
             (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => break,
             (_, KeyCode::BackTab) => {
                 app.focus = app.focus.next();
-                app.update_pattern_line();
+                app.update_input_pattern();
                 continue;
             }
             _ => {}
@@ -337,33 +230,34 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
                     continue;
                 }
                 app.reparse();
+                app.match_editor.eval_regex();
             },
 
             Focus::TextToMatch => {
-                if !app.textmatch_widget.input(key) {
+                if !app.match_editor.input(key) {
                     continue;
                 }
-                app.textmatch_widget.eval_regex();
+                app.match_editor.eval_regex();
             }
 
             Focus::DescTree => match (key.modifiers, key.code) {
-                (KeyModifiers::CONTROL, KeyCode::Char('n')) => app.tree.scroll_down(),
-                (KeyModifiers::CONTROL, KeyCode::Char('j')) => app.tree.scroll_up(),
+                (KeyModifiers::CONTROL, KeyCode::Char('n')) => app.desctree.scroll_down(),
+                (KeyModifiers::CONTROL, KeyCode::Char('j')) => app.desctree.scroll_up(),
                 (_, KeyCode::Char('j') | KeyCode::Down) => {
-                    app.tree.select_down();
-                    app.update_pattern_line();
+                    app.desctree.select_down();
+                    app.update_input_pattern();
                 }
                 (_, KeyCode::Char('k') | KeyCode::Up) => {
-                    app.tree.select_up();
-                    app.update_pattern_line();
+                    app.desctree.select_up();
+                    app.update_input_pattern();
                 }
                 (_, KeyCode::Char('h') | KeyCode::Left) => {
-                    app.tree.select_left();
-                    app.update_pattern_line();
+                    app.desctree.select_left();
+                    app.update_input_pattern();
                 }
                 (_, KeyCode::Char('l') | KeyCode::Right) => {
-                    app.tree.select_right();
-                    app.update_pattern_line();
+                    app.desctree.select_right();
+                    app.update_input_pattern();
                 }
                 _ => {}
             },
