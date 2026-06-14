@@ -1,6 +1,8 @@
 use std::io;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::clipboard;
+use crossterm::execute;
 use ratatui::{
     Frame, layout::{Constraint, Layout, Rect}, style::{Color, Style}, widgets::{Widget, Block}
 };
@@ -218,6 +220,12 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
 
         match app.focus {
             Focus::PatternInput => {
+                if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('y') {
+                    let _ = execute!(std::io::stdout(), clipboard::CopyToClipboard::to_clipboard_from(
+                        app.inputarea.pattern_str()
+                    ));
+                    continue;
+                }
                 if !app.inputarea.input(key) {
                     continue;
                 }
