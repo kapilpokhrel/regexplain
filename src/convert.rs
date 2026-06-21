@@ -14,8 +14,8 @@ pub fn parse_and_convert(pattern: &str) -> Result<RegExplainForm, Box<dyn Error>
     })
 }
 
-fn span(s: &ast::Span) -> Span {
-    Span {
+fn span(s: &ast::Span) -> PatternSpan {
+    PatternSpan {
         start: s.start.offset,
         end: s.end.offset,
     }
@@ -72,7 +72,7 @@ where
 impl From<&Ast> for RegExplainSimplifiedNode {
     fn from(ast: &Ast) -> Self {
         match ast {
-            Ast::Empty(_) => Self::Concat { span: Span { start: 0, end: 0 }, nodes: vec![] },
+            Ast::Empty(_) => Self::Concat { span: PatternSpan { start: 0, end: 0 }, nodes: vec![] },
             Ast::Dot(s) => Self::Class(ClassNode {
                 span: span(s),
                 negated: false,
@@ -280,11 +280,11 @@ impl From<&ast::ClassSet> for ClassKind {
             ast::ClassSet::BinaryOp(op) => ClassKind::BracketedOp {
                 op: ClassBinaryOp::from(op.kind),
                 lhs: ClassOperand {
-                    span: Span::from(op.lhs.as_ref()),
+                    span: PatternSpan::from(op.lhs.as_ref()),
                     kind: Box::new(ClassKind::from(op.lhs.as_ref())),
                 },
                 rhs: ClassOperand {
-                    span: Span::from(op.rhs.as_ref()),
+                    span: PatternSpan::from(op.rhs.as_ref()),
                     kind: Box::new(ClassKind::from(op.rhs.as_ref())),
                 },
             },
@@ -292,11 +292,11 @@ impl From<&ast::ClassSet> for ClassKind {
     }
 }
 
-impl From<&ast::ClassSet> for Span {
+impl From<&ast::ClassSet> for PatternSpan {
     fn from(s : &ast::ClassSet) -> Self {
         match s {
             ast::ClassSet::Item(item) => {
-                let items_spans: Vec<Span> = collect_items(item).into_iter().map(|x| {
+                let items_spans: Vec<PatternSpan> = collect_items(item).into_iter().map(|x| {
                     match x {
                         ClassItem::Literal(l) => l.span,
                         ClassItem::Range{span: s, ..} => s,
@@ -304,9 +304,9 @@ impl From<&ast::ClassSet> for Span {
                     }
                 }).collect();
                 if items_spans.is_empty() {
-                    Span{start: 0, end: 0}
+                    PatternSpan{start: 0, end: 0}
                 } else {
-                    Span{
+                    PatternSpan{
                         start: items_spans.first().unwrap().start,
                         end: items_spans.last().unwrap().end
                     }

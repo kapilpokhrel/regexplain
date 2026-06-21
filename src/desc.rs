@@ -5,7 +5,7 @@ use std::collections::HashSet;
 pub struct RegexDescriptionNode {
     pub desc: String,
     pub nested_items: Vec<RegexDescriptionNode>,
-    pub span: Span,
+    pub span: PatternSpan,
 }
 
 pub struct DescContext {
@@ -26,7 +26,7 @@ impl DescGenerator {
         }
     }
 
-    pub fn leaf(&self, span: Span, desc: impl Into<String>) -> RegexDescriptionNode {
+    pub fn leaf(&self, span: PatternSpan, desc: impl Into<String>) -> RegexDescriptionNode {
         RegexDescriptionNode { span, desc: desc.into(), nested_items: vec![] }
     }
 }

@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Span {
+pub struct PatternSpan {
     pub start: usize,
     pub end: usize,
 }
@@ -15,15 +15,15 @@ pub enum RegExplainSimplifiedNode {
     Flags(FlagNode),
     Literal(LiteralNode),
     Assertion(AssertionNode),
-    Alt   { span: Span, alts:  Vec<RegExplainSimplifiedNode> },
-    Concat { span: Span, nodes: Vec<RegExplainSimplifiedNode> },
+    Alt   { span: PatternSpan, alts:  Vec<RegExplainSimplifiedNode> },
+    Concat { span: PatternSpan, nodes: Vec<RegExplainSimplifiedNode> },
     Class(ClassNode),
     Group(GroupNode),
     Repeat(RepeatNode),
 }
 
 impl RegExplainSimplifiedNode {
-    pub fn span(&self) -> Span {
+    pub fn span(&self) -> PatternSpan {
         match self {
             Self::Flags(f)            => f.span,
             Self::Literal(l)          => l.span,
@@ -39,7 +39,7 @@ impl RegExplainSimplifiedNode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RepeatNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub greedy: bool,
     pub min: u32,
     /// none means unbounded.
@@ -49,7 +49,7 @@ pub struct RepeatNode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub kind: GroupKind,
     pub inner: Box<RegExplainSimplifiedNode>,
 }
@@ -62,7 +62,7 @@ pub enum GroupKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub negated: bool,
     pub kind: ClassKind,
 }
@@ -94,14 +94,14 @@ pub enum ClassKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassOperand {
-    pub span: Span,
+    pub span: PatternSpan,
     pub kind: Box<ClassKind>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClassItem {
     Literal(LiteralNode),
-    Range { span: Span, start: char, end: char },
+    Range { span: PatternSpan, start: char, end: char },
     Class(ClassNode),
 }
 
@@ -124,7 +124,7 @@ pub enum UnicodeClassKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LiteralNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub ch: LiteralChar,
 }
 
@@ -149,7 +149,7 @@ pub enum SpecialChar {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssertionNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub kind: AssertionKind,
 }
 
@@ -169,13 +169,13 @@ pub enum AssertionKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagNode {
-    pub span: Span,
+    pub span: PatternSpan,
     pub items: Vec<FlagItem>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlagItem {
-    pub span: Span,
+    pub span: PatternSpan,
     pub negated: bool,
     pub kind: FlagKind,
 }

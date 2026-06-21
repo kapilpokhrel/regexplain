@@ -1,26 +1,10 @@
 use crossterm::event::KeyEvent;
 use tui_textarea::{TextArea, WrapMode};
 use ratatui::{
-    layout::Rect, style::{Color, Modifier, Style}, widgets::Widget
+    layout::Rect, style::{Modifier, Style}, widgets::Widget
 };
 use crate::tui::textarea_ext::TextAreaExt;
 use crate::colorize::ColorGenerator;
-
-
-fn to_color(rgb: [f32; 3]) -> Color {
-    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
-    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
-}
-
-fn brighten_fg(fg: Option<[f32; 3]>, factor: f32) -> Option<[f32; 3]> {
-    fg.map(|c| {
-        [
-            (c[0] * factor).min(1.0),
-            (c[1] * factor).min(1.0),
-            (c[2] * factor).min(1.0),
-        ]
-    })
-}
 
 pub struct InputLineWidget {
     textarea: TextArea<'static>,
@@ -60,7 +44,7 @@ impl InputLineWidget {
     pub fn render_input_line(
         &mut self,
         cgen: &ColorGenerator,
-        selected_span: Option<crate::types::Span>,
+        selected_span: Option<crate::types::PatternSpan>,
     ) {
         let pattern = self.pattern_str();
         let len = pattern.len();
@@ -98,23 +82,18 @@ impl InputLineWidget {
         if start >= end {
             return;
         }
-        for idx in start..end {
-            let (fg, bg) = cgen.char_color(idx);
-            let fg_b = brighten_fg(fg, fg_bright_factor);
-            let mut s = Style::default();
-            if let Some(f) = fg_b {
-                s = s.fg(to_color(f));
-            }
-            if let Some(b) = bg {
-                s = s.bg(to_color(b));
-            }
+        let colored_slice = cgen.ratatui_colored_slice(&self.pattern_str(), start, end, fg_bright_factor);
+        for (i, span) in colored_slice.iter().enumerate() {
+            let mut style = span.style;
             if let Some(additional_s) = additional_style {
-                s = s.patch(additional_s);
+                style = style.patch(additional_s);
             }
+            let idx = start + i;
+
             let cr = self.textarea.get_cursor_range_from_offsets(idx, idx + 1);
             self.textarea.custom_highlight(
                 cr,
-                s,
+                style,
                 1
             );
         }

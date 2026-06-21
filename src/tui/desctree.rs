@@ -14,7 +14,7 @@ pub struct DescTreeNode {
     pub text: Text<'static>,
     pub children: Vec<DescTreeNode>,
     pub opened: bool,
-    span: types::Span,
+    span: types::PatternSpan,
 }
 
 struct FlattenedDescTreeNode<'a> {
@@ -149,7 +149,7 @@ impl DescTreeWidget {
 
         let span = node.span;
         let mut text_spans = vec![Span::raw("`")];
-        text_spans.extend(get_colored_slice(pattern, span.start, span.end, cgen));
+        text_spans.extend(cgen.ratatui_colored_slice(pattern, span.start, span.end, 1.0));
         text_spans.push(Span::raw(format!("` {}", node.desc)));
 
         vec![DescTreeNode{
@@ -169,7 +169,7 @@ impl DescTreeWidget {
         }
     }
 
-    pub fn get_selected_span(&self) -> Option<crate::types::Span> {
+    pub fn get_selected_span(&self) -> Option<crate::types::PatternSpan> {
         let path = self.selected_path();
         if path.is_empty() {
             None
@@ -469,33 +469,4 @@ impl RenderViewport {
     pub fn is_full(&self) -> bool {
         self.row >= self.bottom_row
     }
-}
-
-fn get_colored_slice(
-    pattern: &str,
-    start: usize,
-    end: usize,
-    cgen: &ColorGenerator,
-) -> Vec<Span<'static>> {
-    if start >= end {
-        return Vec::new();
-    }
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    for idx in start..end {
-        let (fg, bg) = cgen.char_color(idx);
-        let mut style = Style::default();
-        if let Some(f) = fg {
-            style = style.fg(to_color(f));
-        }
-        if let Some(b) = bg {
-            style = style.bg(to_color(b));
-        }
-        spans.push(Span::styled(pattern[idx..idx+1].to_string(), style));
-    }
-    spans
-}
-
-fn to_color(rgb: [f32; 3]) -> Color {
-    let b = |v: f32| (v * 255.0).clamp(0.0, 255.0) as u8;
-    Color::Rgb(b(rgb[0]), b(rgb[1]), b(rgb[2]))
 }
