@@ -4,6 +4,7 @@ mod desc;
 mod colorize;
 mod tui;
 mod cli;
+mod matcher;
 
 use std::path::PathBuf;
 use std::fs;

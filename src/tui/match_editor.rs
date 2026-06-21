@@ -3,56 +3,13 @@ use tui_textarea::TextArea;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, widgets::{Paragraph, Widget}
 };
-use crate::tui::textarea_ext::TextAreaExt;
-
-
-struct RegexMatchGrp {
-    start_offset: usize,
-    end_offset: usize,
-    label: String, // computed label (name or 'group N')
-    groups: Vec<RegexMatchGrp>,
-}
-
-impl RegexMatchGrp {
-    fn contains(&self, other: &RegexMatchGrp) -> bool {
-        self.start_offset <= other.start_offset && other.end_offset <= self.end_offset
-    }
-
-    fn contains_offset(&self, offset: usize) -> bool {
-        offset >= self.start_offset && offset < self.end_offset
-    }
-
-    fn insert(&mut self, child: RegexMatchGrp) {
-        for sub in &mut self.groups {
-            if sub.contains(&child) {
-                sub.insert(child);
-                return;
-            }
-        }
-        self.groups.push(child);
-    }
-}
+use crate::{matcher::eval_regex, tui::textarea_ext::TextAreaExt};
+use crate::matcher::RegexMatchGrp;
 
 pub struct MatchEditorWidget {
     re: Option<regex::bytes::Regex>,
     textarea: TextArea<'static>,
     matches: Vec<RegexMatchGrp>,
-}
-
-fn find_group_path(m: &RegexMatchGrp, offset: usize) -> Vec<&RegexMatchGrp>
-{
-    if !m.contains_offset(offset) {
-        return Vec::new();
-    }
-
-    let mut path = vec![m];
-    for sub in &m.groups {
-        if sub.contains_offset(offset) {
-            path.extend(find_group_path(sub, offset));
-            return path;
-        }
-    }
-    path
 }
 
 impl MatchEditorWidget {
@@ -81,7 +38,7 @@ impl MatchEditorWidget {
         let offset = self.textarea.get_flat_offset_from_cursor();
         for m in &self.matches {
             if m.contains_offset(offset) {
-                let path = find_group_path(m, offset);
+                let path = m.find_group_path(offset);
                 return path.iter().skip(1).map(|g| g.label.clone()).collect();
             }
         }
@@ -93,50 +50,17 @@ impl MatchEditorWidget {
         self.re = r;
     }
 
-    pub fn eval_regex(&mut self) {
+    pub fn update(&mut self) {
         if let Some(re) = &self.re {
             let lines = self.textarea.lines();
             let text: String = lines.join("\n");
-
-            let grp_names: Vec<Option<&str>> = re.capture_names().collect();
-
-            let mut matches: Vec<RegexMatchGrp> = Vec::new();
-            for caps in re.captures_iter(text.as_bytes()) {
-                let full_match = caps.get(0).unwrap();
-                let mut root_match = RegexMatchGrp {
-                    start_offset: full_match.start(),
-                    end_offset: full_match.end(),
-                    label: String::new(),
-                    groups: Vec::new(),
-                };
-
-                for (i, grp) in caps.iter().enumerate() {
-                    if i == 0 {
-                        continue;
-                    }
-                    let name = grp_names.get(i).and_then(|n| n.and_then(|n| Some(n.to_string())));
-                    if let Some(grp_match) = grp {
-                        let child = RegexMatchGrp {
-                            start_offset: grp_match.start(),
-                            end_offset: grp_match.end(),
-                            label: if let Some(ref n) = name { n.clone() } else { format!("group {}", i) },
-                            groups: Vec::new(),
-                        };
-                        root_match.insert(child);
-                    }
-                }
-
-                matches.push(root_match);
-            }
-
-            self.textarea.clear_custom_highlight();
+            let matches = eval_regex(re, &text);
             for m in &matches {
                 Self::highlight_match(&mut self.textarea, m, 1);
             }
 
             self.matches = matches;
         }
-
     }
 
     fn highlight_match(textarea: &mut TextArea, m: &RegexMatchGrp, n: u8) {

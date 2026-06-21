@@ -208,7 +208,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
     app.set_pattern(pattern);
     app.set_match_text(text_to_match);
     app.reparse();
-    app.match_editor.eval_regex();
+    app.match_editor.update();
 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
@@ -245,14 +245,14 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
                     continue;
                 }
                 app.reparse();
-                app.match_editor.eval_regex();
+                app.match_editor.update();
             },
 
             Focus::TextToMatch => {
                 if !app.match_editor.input(key) {
                     continue;
                 }
-                app.match_editor.eval_regex();
+                app.match_editor.update();
             }
 
             Focus::DescTree => match (key.modifiers, key.code) {
