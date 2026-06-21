@@ -35,6 +35,15 @@ impl InputLineWidget {
         }
     }
 
+    pub fn set_pattern(&mut self, p: impl Into<String>) {
+        let p = p.into().replace("\n", "");
+        if p.is_empty() {
+            return
+        }
+        let col = p.len();
+        self.textarea.set_lines(vec![p], (0, col));
+    }
+
     pub fn input(&mut self, k: KeyEvent) -> bool {
         self.textarea.input(k)
     }

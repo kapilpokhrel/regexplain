@@ -64,6 +64,15 @@ impl MatchEditorWidget {
         }
     }
 
+    pub fn set_match_text(&mut self, t: impl Into<String>) {
+        let lines: Vec<String> = t.into().lines().map(|s| s.to_string()).collect();
+        if lines.is_empty() {
+            return
+        }
+        let cursor = (lines.len() - 1, lines.last().unwrap().len());
+        self.textarea.set_lines(lines, cursor);
+    }
+
     pub fn input(&mut self, k: KeyEvent) -> bool {
         self.textarea.input(k)
     }

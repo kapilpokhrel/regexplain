@@ -57,6 +57,14 @@ impl App {
         }
     }
 
+    fn set_pattern(&mut self, p: impl Into<String>) {
+        self.inputarea.set_pattern(p);
+    }
+
+    fn set_match_text(&mut self, t: impl Into<String>) {
+        self.match_editor.set_match_text(t);
+    }
+
     fn reparse(&mut self) {
         let input = self.inputarea.pattern_str();
         if input.is_empty() {
@@ -188,15 +196,19 @@ fn ui(f: &mut Frame, app: &mut App) {
     render_tree_panel(f, app, sides[1]);
 }
 
-pub fn run() -> io::Result<()> {
+pub fn run(pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::Result<()> {
     let mut terminal = ratatui::init();
-    let result = run_app(&mut terminal);
+    let result = run_app(&mut terminal, pattern, text_to_match);
     ratatui::restore();
     result
 }
 
-fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::Result<()> {
     let mut app = App::new();
+    app.set_pattern(pattern);
+    app.set_match_text(text_to_match);
+    app.reparse();
+    app.match_editor.eval_regex();
 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
@@ -224,6 +236,9 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
                     let _ = execute!(std::io::stdout(), clipboard::CopyToClipboard::to_clipboard_from(
                         app.inputarea.pattern_str()
                     ));
+                    continue;
+                }
+                if key.code == KeyCode::Enter {
                     continue;
                 }
                 if !app.inputarea.input(key) {
