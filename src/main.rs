@@ -3,6 +3,7 @@ mod convert;
 mod desc;
 mod colorize;
 mod tui;
+mod cli;
 
 use std::path::PathBuf;
 use std::fs;
@@ -23,6 +24,9 @@ struct CliArgs {
     /// takes text to match form the contents of the file
     #[arg(short, long, conflicts_with="text_to_match")]
     file_to_match: Option<PathBuf>,
+
+    #[arg(short, long, requires="pattern", default_value_t = false)]
+    no_tui: bool
 }
 
 fn main() {
@@ -38,8 +42,12 @@ fn main() {
         String::new()
     };
 
-    if let Err(e) = crate::tui::app::run(args.pattern, initial_text_to_match) {
-        eprintln!("tui error: {}", e);
-        std::process::exit(1);
+    if args.no_tui {
+        crate::cli::run(args.pattern, initial_text_to_match);
+    } else {
+        if let Err(e) = crate::tui::app::run(args.pattern, initial_text_to_match) {
+            eprintln!("tui error: {}", e);
+            std::process::exit(1);
+        }
     }
 }
