@@ -221,7 +221,13 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
         }
 
         match (key.modifiers, key.code) {
-            (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => break,
+            (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                let _ = crate::state::set_state(
+                    &app.inputarea.pattern_str(),
+                    &app.match_editor.get_match_text()
+                );
+                break
+            },
             (_, KeyCode::BackTab) => {
                 app.focus = app.focus.next();
                 app.update_input_pattern();

@@ -21,6 +21,10 @@ impl MatchEditorWidget {
         }
     }
 
+    pub fn get_match_text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
     pub fn set_match_text(&mut self, t: impl Into<String>) {
         let lines: Vec<String> = t.into().lines().map(|s| s.to_string()).collect();
         if lines.is_empty() {
@@ -52,8 +56,7 @@ impl MatchEditorWidget {
 
     pub fn update(&mut self) {
         if let Some(re) = &self.re {
-            let lines = self.textarea.lines();
-            let text: String = lines.join("\n");
+            let text = self.get_match_text();
             let matches = eval_regex(re, &text);
             for m in &matches {
                 Self::highlight_match(&mut self.textarea, m, 1);
