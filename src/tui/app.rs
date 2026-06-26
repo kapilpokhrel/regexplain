@@ -1,6 +1,6 @@
 use std::io;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind, MouseButton, KeyModifiers, EnableMouseCapture, DisableMouseCapture};
 use crossterm::clipboard;
 use crossterm::execute;
 use ratatui::{
@@ -35,8 +35,13 @@ impl Focus {
 struct App {
     focus: Focus,
 
-    inputarea: InputLineWidget,
+    input_widget_rect: Rect,
+    input_widget: InputLineWidget,
+
+    desctree_widget_rect: Rect,
     desctree_widget: DescTreeWidget,
+
+    match_editor_rect: Rect,
     match_editor: MatchEditorWidget,
 
     error: Option<String>,
@@ -48,8 +53,15 @@ impl App {
     fn new() -> Self {
         Self {
             focus: Focus::PatternInput,
-            inputarea: InputLineWidget::new(),
+
+            input_widget_rect: Rect::new(0,0,0,0),
+            input_widget: InputLineWidget::new(),
+
+            desctree_widget_rect: Rect::new(0,0,0,0),
             desctree_widget: DescTreeWidget::new(),
+
+
+            match_editor_rect: Rect::new(0,0,0,0),
             match_editor: MatchEditorWidget::new(),
             error: None,
 
@@ -58,7 +70,7 @@ impl App {
     }
 
     fn set_pattern(&mut self, p: impl Into<String>) {
-        self.inputarea.set_pattern(p);
+        self.input_widget.set_pattern(p);
     }
 
     fn set_match_text(&mut self, t: impl Into<String>) {
@@ -66,7 +78,7 @@ impl App {
     }
 
     fn reparse(&mut self) {
-        let input = self.inputarea.pattern_str();
+        let input = self.input_widget.pattern_str();
         if input.is_empty() {
             self.error = None;
             self.color_generator = None;
@@ -92,7 +104,7 @@ impl App {
             Err(e) => {
                 self.error = Some(e.to_string());
                 self.color_generator = None;
-                self.inputarea.clear_highlight();
+                self.input_widget.clear_highlight();
             }
         }
     }
@@ -104,7 +116,7 @@ impl App {
             } else {
                 None
             };
-            self.inputarea.render_input_line(c, span);
+            self.input_widget.render_input_line(c, span);
         }
     }
 }
@@ -139,21 +151,24 @@ fn focused_block<'a>(title: &'a str, focused: bool) -> Block<'a> {
     Block::bordered().title(title).border_style(style)
 }
 
-fn render_pattern_input(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_pattern_input(f: &mut Frame, app: &mut App) {
     let focused = app.focus == Focus::PatternInput;
     let block = focused_block("Pattern  (Esc quit · Shift+Tab cycle)", focused);
+    let area = app.input_widget_rect;
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
 
     if inner.height < 1 {
         return;
     }
-    f.render_widget(&app.inputarea, inner);
+    f.render_widget(&app.input_widget, inner);
 }
 
-fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_text_to_match(f: &mut Frame, app: &mut App) {
     let focused = app.focus == Focus::TextToMatch;
     let block = focused_block("Text to match", focused);
+
+    let area = app.match_editor_rect;
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
 
@@ -163,7 +178,7 @@ fn render_text_to_match(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(&app.match_editor, inner);
 }
 
-fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
+fn render_tree_panel(f: &mut Frame, app: &mut App) {
     let focused = app.focus == Focus::DescTree;
     let (sel, total) = app.desctree_widget.selected_index_total();
     let title = match sel {
@@ -172,6 +187,8 @@ fn render_tree_panel(f: &mut Frame, app: &mut App, area: Rect) {
     };
     let style = if focused { Style::default().fg(Color::Yellow) } else { Style::default() };
     let block = Block::bordered().title(title).border_style(style);
+
+    let area = app.desctree_widget_rect;
     let inner = block.inner(area);
     block.render(area, f.buffer_mut());
 
@@ -188,17 +205,22 @@ fn ui(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     let iw = sides[0].width.saturating_sub(2);
-    let ih = (wrapped_lines(&app.inputarea.pattern_str(), iw) + 2).max(3);
+    let ih = (wrapped_lines(&app.input_widget.pattern_str(), iw) + 2).max(3);
     let left = Layout::vertical([Constraint::Length(ih), Constraint::Min(0)]).split(sides[0]);
 
-    render_pattern_input(f, app, left[0]);
-    render_text_to_match(f, app, left[1]);
-    render_tree_panel(f, app, sides[1]);
+    app.input_widget_rect = left[0];
+    app.desctree_widget_rect = sides[1];
+    app.match_editor_rect = left[1];
+    render_pattern_input(f, app);
+    render_text_to_match(f, app);
+    render_tree_panel(f, app);
 }
 
 pub fn run(pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::Result<()> {
     let mut terminal = ratatui::init();
+    let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = run_app(&mut terminal, pattern, text_to_match);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -213,6 +235,29 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
+        if let Ok(Event::Mouse(e)) = event::read() {
+            if e.kind != MouseEventKind::Down(MouseButton::Left) {
+               continue;
+            }
+            let (row, col) = (e.column, e.row);
+
+            let new_f = if app.input_widget_rect.contains((row, col).into()) {
+                Focus::PatternInput
+            } else if app.match_editor_rect.contains((row, col).into()) {
+                Focus::TextToMatch
+            } else if app.desctree_widget_rect.contains((row, col).into()) {
+                Focus::DescTree
+            } else {
+                continue;
+            };
+
+            if new_f != app.focus {
+                app.focus = new_f;
+                app.update_input_pattern();
+            }
+            continue;
+        }
+
         let Event::Key(key) = event::read()? else {
             continue;
         };
@@ -223,7 +268,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
         match (key.modifiers, key.code) {
             (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                 let _ = crate::state::set_state(
-                    &app.inputarea.pattern_str(),
+                    &app.input_widget.pattern_str(),
                     &app.match_editor.get_match_text()
                 );
                 break
@@ -240,14 +285,14 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
             Focus::PatternInput => {
                 if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('y') {
                     let _ = execute!(std::io::stdout(), clipboard::CopyToClipboard::to_clipboard_from(
-                        app.inputarea.pattern_str()
+                        app.input_widget.pattern_str()
                     ));
                     continue;
                 }
                 if key.code == KeyCode::Enter {
                     continue;
                 }
-                if !app.inputarea.input(key) {
+                if !app.input_widget.input(key) {
                     continue;
                 }
                 app.reparse();
