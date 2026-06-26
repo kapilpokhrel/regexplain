@@ -56,6 +56,7 @@ impl MatchEditorWidget {
 
     pub fn update(&mut self) {
         if let Some(re) = &self.re {
+            self.textarea.clear_custom_highlight();
             let text = self.get_match_text();
             let matches = eval_regex(re, &text);
             for m in &matches {
