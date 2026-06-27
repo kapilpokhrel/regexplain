@@ -1,4 +1,4 @@
-use crossterm::event::KeyEvent;
+use crossterm::{clipboard, event::{Event, KeyCode, KeyModifiers}, execute};
 use tui_textarea::{TextArea, WrapMode};
 use ratatui::{
     layout::Rect, style::{Modifier, Style}, widgets::Widget
@@ -28,8 +28,17 @@ impl InputLineWidget {
         self.textarea.set_lines(vec![p], (0, col));
     }
 
-    pub fn input(&mut self, k: KeyEvent) -> bool {
-        self.textarea.input(k)
+    pub fn input(&mut self, e: Event) -> bool {
+        if let Event::Key(key) = e  && key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('y') {
+            let _ = execute!(
+                std::io::stdout(),
+                clipboard::CopyToClipboard::to_clipboard_from(
+                    self.pattern_str()
+                )
+            );
+            return false;
+        }
+        self.textarea.input(e)
     }
 
     pub fn pattern_str(&self) -> String {

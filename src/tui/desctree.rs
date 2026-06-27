@@ -1,3 +1,4 @@
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -17,19 +18,17 @@ pub struct DescTreeNode {
     span: types::PatternSpan,
 }
 
-struct FlattenedDescTreeNode<'a> {
-    node: &'a DescTreeNode,
+struct FlattenedDescTreeNode {
     path: Vec<usize>,
     depth: usize,
     root: bool,
 }
 
-fn flatten_into<'a>(nodes: &'a[DescTreeNode], path: &[usize], depth: usize, out: &mut Vec<FlattenedDescTreeNode<'a>>) {
+fn flatten_into(nodes: &[DescTreeNode], path: &[usize], depth: usize, out: &mut Vec<FlattenedDescTreeNode>) {
     for (i, node) in nodes.iter().enumerate() {
         let mut p = path.to_vec();
         p.push(i);
         out.push(FlattenedDescTreeNode {
-            node,
             path: p.clone(),
             depth,
             root: i == 0,
@@ -40,7 +39,7 @@ fn flatten_into<'a>(nodes: &'a[DescTreeNode], path: &[usize], depth: usize, out:
     }
 }
 
-fn flatten(nodes: &[DescTreeNode]) -> Vec<FlattenedDescTreeNode<'_>> {
+fn flatten(nodes: &[DescTreeNode]) -> Vec<FlattenedDescTreeNode> {
     let mut out = Vec::new();
     flatten_into(nodes, &[], 0, &mut out);
     out
@@ -78,10 +77,11 @@ impl DescTreeItemLayout {
         let item_layout: Vec<DescTreeItemLayout> = flat
             .iter()
             .map(|item| {
+                let node = tree.get_node(&item.path).unwrap();
                 let sep = !item.root || item.depth > 0;
                 let indent_width = item.depth * 2 + 2; // + 2 because of the prefix symbol (▶/▼)
                 let para_width = content_w.saturating_sub(indent_width).max(1);
-                let node_h = compute_text_height(&item.node.text, para_width).max(1);
+                let node_h = compute_text_height(&node.text, para_width).max(1);
                 if item.path == tree.selected {
                     sel_row = Some(total_rows + sep as usize);
                 }
@@ -119,6 +119,7 @@ pub struct DescTreeWidget {
     selected: Vec<usize>,
     vscroll: usize,
     accent_color: Color,
+    rendered_nodes: Vec<(Rect, FlattenedDescTreeNode)>
 }
 
 impl DescTreeWidget {
@@ -127,7 +128,75 @@ impl DescTreeWidget {
             nodes: Vec::new(),
             selected: Vec::new(),
             vscroll: 0,
-            accent_color: Color::Yellow
+            accent_color: Color::Yellow,
+            rendered_nodes: Vec::new(),
+        }
+    }
+
+    /// returns true on selecton modified
+    pub fn input(&mut self, e: Event) -> bool {
+        match e {
+            Event::Mouse(mouse_e) => {
+                match mouse_e.kind {
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        let (row, col) = (mouse_e.column, mouse_e.row);
+                        let sel = self.rendered_nodes.iter().find_map(|(r, item)| {
+                            r.contains((row, col).into()).then_some(item)
+                        });
+                        if let Some(item) = sel {
+                            self.selected = item.path.clone();
+                            return true;
+                        }
+                    },
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        let (row, col) = (mouse_e.column, mouse_e.row);
+                        let sel_path = self.rendered_nodes.iter().find_map(|(r, item)| {
+                            r.contains((row, col).into()).then_some(item.path.clone())
+                        });
+                        if let Some(p) = sel_path {
+                            let node_op = self.get_node_mut(&p);
+                            if let Some(n) = node_op {
+                                n.opened = true;
+                            }
+                            self.selected = p;
+                            return true;
+                        }
+                    },
+                    MouseEventKind::ScrollUp => {
+                        self.scroll_up();
+                    },
+                    MouseEventKind::ScrollDown => {
+                        self.scroll_down();
+                    },
+                    _ => {}
+                }
+                false
+            },
+            Event::Key(key_e) => {
+                if key_e.kind != KeyEventKind::Press {
+                    return false
+                }
+                match (key_e.modifiers, key_e.code) {
+                    (KeyModifiers::CONTROL, KeyCode::Char('n')) => self.scroll_down(),
+                    (KeyModifiers::CONTROL, KeyCode::Char('j')) => self.scroll_up(),
+                    (_, KeyCode::Char('j') | KeyCode::Down) => {
+                        // we need to return something different than just true
+                        self.select_down();
+                    }
+                    (_, KeyCode::Char('k') | KeyCode::Up) => {
+                        self.select_up();
+                    }
+                    (_, KeyCode::Char('h') | KeyCode::Left) => {
+                        self.select_left();
+                    }
+                    (_, KeyCode::Char('l') | KeyCode::Right) => {
+                        self.select_right();
+                    }
+                    _ => { return false }
+                }
+                true
+            },
+            _ => false
         }
     }
 
@@ -156,7 +225,7 @@ impl DescTreeWidget {
             text: Line::from(text_spans).into(),
             opened: false,
             children,
-            span
+            span,
         }]
 
     }
@@ -208,6 +277,17 @@ impl DescTreeWidget {
         let mut current = self.nodes.get_mut(path[0])?;
         for &idx in &path[1..] {
             current = current.children.get_mut(idx)?;
+        }
+        Some(current)
+    }
+
+    fn get_node(&self, path: &[usize]) -> Option<&DescTreeNode> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut current = self.nodes.get(path[0])?;
+        for &idx in &path[1..] {
+            current = current.children.get(idx)?;
         }
         Some(current)
     }
@@ -304,11 +384,11 @@ impl DescTreeWidget {
         );
     }
 
-    fn calculate_prefix_text(item: &FlattenedDescTreeNode, height: usize, accent_color: Color) -> Text<'static> {
-        let indent = "  ".repeat(item.depth);
-        let prefix_sym = if item.node.children.is_empty() {
+    fn calculate_prefix_text(depth: usize, node: &DescTreeNode, height: usize, accent_color: Color) -> Text<'static> {
+        let indent = "  ".repeat(depth);
+        let prefix_sym = if node.children.is_empty() {
             "  "
-        } else if item.node.opened {
+        } else if node.opened {
             "▼ "
         } else {
             "▶ "
@@ -352,7 +432,10 @@ impl Widget for &mut DescTreeWidget {
         let mut viewport = RenderViewport::new(self.vscroll, area.y, area.y + content_h as u16);
 
         let flat = flatten(&self.nodes);
-        for (item, lay) in flat.iter().zip(item_layout) {
+        let mut rendered: Vec<(Rect, FlattenedDescTreeNode)> = Vec::new();
+
+        for (item, lay) in flat.into_iter().zip(item_layout) {
+            let node = self.get_node(&item.path).unwrap();
             if viewport.is_full() {
                 break
             }
@@ -386,19 +469,21 @@ impl Widget for &mut DescTreeWidget {
                 Style::default()
             };
 
-            let prefix_text = DescTreeWidget::calculate_prefix_text(item, lay.node_h, self.accent_color);
+            let prefix_text = DescTreeWidget::calculate_prefix_text(item.depth, node, lay.node_h, self.accent_color);
             Paragraph::new(prefix_text)
                 .scroll((offset as u16, 0))
                 .style(style)
                 .render(pfx_rect, buf);
-            Paragraph::new(item.node.text.clone())
+            Paragraph::new(node.text.clone())
                 .wrap(Wrap { trim: false })
                 .scroll((offset as u16, 0))
                 .style(style)
                 .render(para_rect, buf);
 
             viewport.advance(visible as u16);
+            rendered.push((pfx_rect.union(para_rect), item));
         }
+        self.rendered_nodes = rendered;
     }
 }
 

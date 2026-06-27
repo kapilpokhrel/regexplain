@@ -1,4 +1,4 @@
-use crossterm::event::KeyEvent;
+use crossterm::event::Event;
 use tui_textarea::TextArea;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect}, style::{Color, Modifier, Style}, widgets::{Paragraph, Widget}
@@ -34,8 +34,8 @@ impl MatchEditorWidget {
         self.textarea.set_lines(lines, cursor);
     }
 
-    pub fn input(&mut self, k: KeyEvent) -> bool {
-        self.textarea.input(k)
+    pub fn input(&mut self, e: Event) -> bool {
+        self.textarea.input(e)
     }
 
     fn get_breadcrumb_path(&self) -> Vec<String> {

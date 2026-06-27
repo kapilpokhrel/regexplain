@@ -1,10 +1,15 @@
 use std::io;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseEventKind, MouseButton, KeyModifiers, EnableMouseCapture, DisableMouseCapture};
-use crossterm::clipboard;
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use ratatui::{
-    Frame, layout::{Constraint, Layout, Rect}, style::{Color, Style}, widgets::{Widget, Block}
+    Frame,
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style},
+    widgets::{Block, Widget},
 };
 use regex::bytes::Regex;
 
@@ -12,8 +17,8 @@ use crate::colorize::{ColorGenerator, Colorizer};
 use crate::convert;
 use crate::desc::{DescGenerator, Describer};
 use crate::tui::desctree::DescTreeWidget;
-use crate::tui::match_editor::MatchEditorWidget;
 use crate::tui::inputarea::InputLineWidget;
+use crate::tui::match_editor::MatchEditorWidget;
 
 #[derive(PartialEq, Clone, Copy)]
 enum Focus {
@@ -46,7 +51,7 @@ struct App {
 
     error: Option<String>,
 
-    color_generator: Option<ColorGenerator>
+    color_generator: Option<ColorGenerator>,
 }
 
 impl App {
@@ -54,14 +59,13 @@ impl App {
         Self {
             focus: Focus::PatternInput,
 
-            input_widget_rect: Rect::new(0,0,0,0),
+            input_widget_rect: Rect::new(0, 0, 0, 0),
             input_widget: InputLineWidget::new(),
 
-            desctree_widget_rect: Rect::new(0,0,0,0),
+            desctree_widget_rect: Rect::new(0, 0, 0, 0),
             desctree_widget: DescTreeWidget::new(),
 
-
-            match_editor_rect: Rect::new(0,0,0,0),
+            match_editor_rect: Rect::new(0, 0, 0, 0),
             match_editor: MatchEditorWidget::new(),
             error: None,
 
@@ -93,7 +97,7 @@ impl App {
                 self.desctree_widget = DescTreeWidget::from_regex_description_tree(
                     &DescGenerator::new().describe(form.root),
                     &form.pattern,
-                    &cgen
+                    &cgen,
                 );
 
                 self.color_generator = Some(cgen);
@@ -185,7 +189,11 @@ fn render_tree_panel(f: &mut Frame, app: &mut App) {
         Some(i) => format!("Description: {}/{}", i, total),
         None => "Description".to_string(),
     };
-    let style = if focused { Style::default().fg(Color::Yellow) } else { Style::default() };
+    let style = if focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
     let block = Block::bordered().title(title).border_style(style);
 
     let area = app.desctree_widget_rect;
@@ -225,7 +233,11 @@ pub fn run(pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::
     result
 }
 
-fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::Result<()> {
+fn run_app(
+    terminal: &mut ratatui::DefaultTerminal,
+    pattern: impl Into<String>,
+    text_to_match: impl Into<String>,
+) -> io::Result<()> {
     let mut app = App::new();
     app.set_pattern(pattern);
     app.set_match_text(text_to_match);
@@ -235,99 +247,66 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        let e = event::read();
-        if let Ok(Event::Mouse(mouse_e)) = e {
-            if mouse_e.kind != MouseEventKind::Down(MouseButton::Left) {
-               continue;
-            }
-            let (row, col) = (mouse_e.column, mouse_e.row);
-
-            let new_f = if app.input_widget_rect.contains((row, col).into()) {
-                Focus::PatternInput
-            } else if app.match_editor_rect.contains((row, col).into()) {
-                Focus::TextToMatch
-            } else if app.desctree_widget_rect.contains((row, col).into()) {
-                Focus::DescTree
-            } else {
-                continue;
-            };
-
-            if new_f != app.focus {
-                app.focus = new_f;
-                app.update_input_pattern();
-            }
-            continue;
-        }
-
-        let Event::Key(key) = e? else {
+        let Ok(e) = event::read() else {
             continue;
         };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
 
-        match (key.modifiers, key.code) {
-            (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-                let _ = crate::state::set_state(
-                    &app.input_widget.pattern_str(),
-                    &app.match_editor.get_match_text()
-                );
-                break
+        match e {
+            Event::Mouse(mouse_e) if mouse_e.kind == MouseEventKind::Down(MouseButton::Left) => {
+                let (row, col) = (mouse_e.column, mouse_e.row);
+
+                let new_f = if app.input_widget_rect.contains((row, col).into()) {
+                    Some(Focus::PatternInput)
+                } else if app.match_editor_rect.contains((row, col).into()) {
+                    Some(Focus::TextToMatch)
+                } else if app.desctree_widget_rect.contains((row, col).into()) {
+                    Some(Focus::DescTree)
+                } else {
+                    None
+                };
+
+                if let Some(f) = new_f && f != app.focus {
+                    app.focus = f;
+                    app.update_input_pattern();
+                }
             },
-            (_, KeyCode::BackTab) => {
-                app.focus = app.focus.next();
-                app.update_input_pattern();
-                continue;
-            }
+            Event::Key(key) => {
+                match (key.modifiers, key.code) {
+                    (_, KeyCode::Esc) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                        let _ = crate::state::set_state(
+                            &app.input_widget.pattern_str(),
+                            &app.match_editor.get_match_text(),
+                        );
+                        break;
+                    }
+                    (_, KeyCode::BackTab) => {
+                        app.focus = app.focus.next();
+                        app.update_input_pattern();
+                        continue;
+                    }
+                    _ => {}
+                }
+            },
             _ => {}
         }
 
         match app.focus {
             Focus::PatternInput => {
-                if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('y') {
-                    let _ = execute!(std::io::stdout(), clipboard::CopyToClipboard::to_clipboard_from(
-                        app.input_widget.pattern_str()
-                    ));
-                    continue;
+                if app.input_widget.input(e) {
+                    app.reparse();
+                    app.match_editor.update();
                 }
-                if key.code == KeyCode::Enter {
-                    continue;
-                }
-                if !app.input_widget.input(key) {
-                    continue;
-                }
-                app.reparse();
-                app.match_editor.update();
             },
-
             Focus::TextToMatch => {
-                if !app.match_editor.input(key) {
-                    continue;
+                if app.match_editor.input(e) {
+                    app.match_editor.update();
                 }
-                app.match_editor.update();
-            }
-
-            Focus::DescTree => match (key.modifiers, key.code) {
-                (KeyModifiers::CONTROL, KeyCode::Char('n')) => app.desctree_widget.scroll_down(),
-                (KeyModifiers::CONTROL, KeyCode::Char('j')) => app.desctree_widget.scroll_up(),
-                (_, KeyCode::Char('j') | KeyCode::Down) => {
-                    app.desctree_widget.select_down();
-                    app.update_input_pattern();
-                }
-                (_, KeyCode::Char('k') | KeyCode::Up) => {
-                    app.desctree_widget.select_up();
-                    app.update_input_pattern();
-                }
-                (_, KeyCode::Char('h') | KeyCode::Left) => {
-                    app.desctree_widget.select_left();
-                    app.update_input_pattern();
-                }
-                (_, KeyCode::Char('l') | KeyCode::Right) => {
-                    app.desctree_widget.select_right();
-                    app.update_input_pattern();
-                }
-                _ => {}
             },
+            Focus::DescTree => {
+                if app.desctree_widget.input(e) {
+                    app.update_input_pattern();
+                }
+            }
         }
     }
     Ok(())
