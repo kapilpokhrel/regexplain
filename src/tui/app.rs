@@ -235,11 +235,12 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
 
-        if let Ok(Event::Mouse(e)) = event::read() {
-            if e.kind != MouseEventKind::Down(MouseButton::Left) {
+        let e = event::read();
+        if let Ok(Event::Mouse(mouse_e)) = e {
+            if mouse_e.kind != MouseEventKind::Down(MouseButton::Left) {
                continue;
             }
-            let (row, col) = (e.column, e.row);
+            let (row, col) = (mouse_e.column, mouse_e.row);
 
             let new_f = if app.input_widget_rect.contains((row, col).into()) {
                 Focus::PatternInput
@@ -258,7 +259,7 @@ fn run_app(terminal: &mut ratatui::DefaultTerminal, pattern: impl Into<String>, 
             continue;
         }
 
-        let Event::Key(key) = event::read()? else {
+        let Event::Key(key) = e? else {
             continue;
         };
         if key.kind != KeyEventKind::Press {
