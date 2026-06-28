@@ -1,6 +1,16 @@
 # regexplain
 
-Interactively explore and explain regular expressions.
+A terminal UI for exploring and explaining regular expressions — like regex101, but in your terminal.
+
+![demo](regexplain.gif)
+
+## Features
+
+- **Interactive regex tree** — walk the AST as a human-readable tree. Vim keys to navigate, click a node to highlight its span in the pattern.
+- **Live match highlighting** — matches and capture groups highlight in real time as you type the pattern or edit the text. A breadcrumb shows you where you are in the group tree.
+- **Flavour-aware design** — parses the raw AST into a simple intermediate form, making it easier to add new regex flavours later. (Only Rust-flavoured regex for now.)
+- **Dual mode** — TUI for exploration, `--no-tui` for quick CLI output.
+- **State persistence** — `-r` restores your last session.
 
 ```
 regexplain [OPTIONS]
