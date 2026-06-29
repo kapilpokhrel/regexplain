@@ -1,16 +1,8 @@
 # regexplain
 
-A terminal UI for exploring and explaining regular expressions — like regex101, but in your terminal.
+A terminal UI for explaining and visualizing regular expressions, kindof like regex101.
 
 ![demo](regexplain.gif)
-
-## Features
-
-- **Interactive regex tree** — walk the AST as a human-readable tree. Vim keys to navigate, click a node to highlight its span in the pattern.
-- **Live match highlighting** — matches and capture groups highlight in real time as you type the pattern or edit the text. A breadcrumb shows you where you are in the group tree.
-- **Flavour-aware design** — parses the raw AST into a simple intermediate form, making it easier to add new regex flavours later. (Only Rust-flavoured regex for now.)
-- **Dual mode** — TUI for exploration, `--no-tui` for quick CLI output.
-- **State persistence** — `-r` restores your last session.
 
 ```
 regexplain [OPTIONS]
@@ -24,22 +16,21 @@ regexplain [OPTIONS]
   -V, --version                        print version
 ```
 
-## Building
-
-```
-cargo build --release
-```
+## Design
+I structured it in such a way that it first parses raw and verbose AST (currently only from [regex_syntax](https://docs.rs/regex-syntax/latest/regex_syntax/))
+into a simplified form and all the other modules, (description generator, colorizer) work on top of that simplified intermediate form.
+I did this to so that we may easily add a regex flavours later (only rust-flavoured regex right now).
 
 ## Usage
 
+You can download the binary from release or if you have cargo
+
 ```
-regexplain -p '(\w+)@(\w+)\.(\w+)' -t 'hello@example.com'
-regexplain -p '^TODO' -f todo.md
-regexplain -p '\d{3}-\d{4}' -t '555-1234' --no-tui
-regexplain -r
+cargo install --git https://github.com/kapilpokhrel/regexplain
 ```
 
-## TUI Controls
+
+### Controls
 
 | Key | Action |
 |---|---|
@@ -47,22 +38,12 @@ regexplain -r
 | `Shift+Tab` | Cycle focus (Pattern → Text → Desc Tree) |
 | Click | Focus the clicked panel |
 | `Ctrl+Y` | Copy pattern to clipboard (when focused on pattern input) |
+| `j/k/h/l` or Arrows | Navigate desctree (desctree focused) |
+| `Ctrl+N` | Scroll viewport down (desctree focused) |
+| `Ctrl+J` | Scroll viewport up (desctree focused) |
 
-### Pattern Input & Text to Match
 
-Both use `tui-textarea2` with Emacs-style bindings (`C-f`/`C-b`, `C-n`/`C-p`, `M-f`/`M-b`, `C-a`/`C-e`, `C-d`/`C-h`, `C-k`, `M-<`/`M->`, etc.). The pattern input is single-line (Enter disabled).
-
-### Description Tree
-
-| Key | Action |
-|---|---|
-| `j` / `Down` | Move selection down |
-| `k` / `Up` | Move selection up |
-| `h` / `Left` | Collapse node / move to parent |
-| `l` / `Right` | Expand node |
-| `Ctrl+N` | Scroll viewport down |
-| `Ctrl+J` | Scroll viewport up |
-
-Selecting a description node highlights the matching span in the pattern input and shows a breadcrumb in the text panel.
+Also, both input and match editor window use `tui-textarea2`, so we get Emacs-style bindings (`C-f`/`C-b`, `C-n`/`C-p`, `M-f`/`M-b`, `C-a`/`C-e`, `C-d`/`C-h`, `C-k`, `M-<`/`M->`, etc.). 
+The pattern input is single-line (Enter disabled).
 
 I'm still getting the hang of Rust, so the code might not always be the most idiomatic. This project also went through a lot of iterations (and pauses) — you might smell some of that in places.
