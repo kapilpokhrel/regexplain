@@ -226,6 +226,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
 pub fn run(pattern: impl Into<String>, text_to_match: impl Into<String>) -> io::Result<()> {
     let mut terminal = ratatui::init();
+
+    // Multiplexer like GNU Screen sets altscreen off by default; so manual clear() is a
+    // simple defense against that
+    terminal.clear()?;
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let result = run_app(&mut terminal, pattern, text_to_match);
     let _ = execute!(std::io::stdout(), DisableMouseCapture);

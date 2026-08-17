@@ -46,4 +46,12 @@ cargo install --git https://github.com/kapilpokhrel/regexplain
 Also, both input and match editor window use `tui-textarea2`, so we get Emacs-style bindings (`C-f`/`C-b`, `C-n`/`C-p`, `M-f`/`M-b`, `C-a`/`C-e`, `C-d`/`C-h`, `C-k`, `M-<`/`M->`, etc.). 
 The pattern input is single-line (Enter disabled).
 
+> [!NOTE]
+> If you are using GNU Screen, put this in your `screenrc` file:
+>
+> ```ini
+> truecolor on
+> altscreen on
+> ```
+
 I'm still getting the hang of Rust, so the code might not always be the most idiomatic. This project also went through a lot of iterations (and pauses) — you might smell some of that in places.
